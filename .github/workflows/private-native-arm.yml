@@ -1,0 +1,562 @@
+# One approved manual native ARM build. No deployment or provider calls.
+name: Private native ARM image build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: labs-private-arm-build
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - name: Verify free public route and read exact source without persisted credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
+          python3 - <<'PY'
+          import base64,json,os,subprocess,urllib.request
+          repo=os.environ['GITHUB_REPOSITORY'];sha=os.environ['GITHUB_SHA']
+          assert repo=='latharrr/labs-meet-companion'
+          assert os.environ['GITHUB_EVENT_NAME']=='workflow_dispatch'
+          assert os.environ['GITHUB_REF']=='refs/heads/main'
+          req=urllib.request.Request('https://api.github.com/repos/'+repo,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+          with urllib.request.urlopen(req,timeout=25) as response:metadata=json.load(response)
+          assert metadata.get('private') is False, 'Free public repository route required; no paid fallback'
+          subprocess.run(['git','init','.'],check=True)
+          env={**os.environ,'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'http.https://github.com/.extraheader','GIT_CONFIG_VALUE_0':'AUTHORIZATION: basic '+base64.b64encode(('x-access-token:'+os.environ['GH_TOKEN']).encode()).decode()}
+          subprocess.run(['git','fetch','--depth=1','https://github.com/'+repo+'.git',sha],env=env,check=True,timeout=120)
+          subprocess.run(['git','checkout','--detach','FETCH_HEAD'],check=True)
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==sha
+          PY
+      - name: Materialize reviewed build-only helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/labs-build-tools"
+          cat > "$RUNNER_TEMP/labs-build-tools/Dockerfile.meetings.template" <<'LABS_REVIEWED_SOURCE'
+          # Review-only derivative. Requires generated context and independently approved host build.
+          # Upstream source and locks remain pinned. No stock Lite entrypoint/terminal/agent image.
+          FROM bot AS meetings
+          USER root
+          ENV DEBIAN_FRONTEND=noninteractive UV_LINK_MODE=copy PYTHONUNBUFFERED=1
+          RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv supervisor tini postgresql-client \
+              && rm -rf /var/lib/apt/lists/*
+          # Checksum-pinned upstream uv release, injected by exact-source generator.
+          @UV_INSTALL@
+          COPY admin/pyproject.toml admin/uv.lock /tmp/admin/
+          RUN cd /tmp/admin && /usr/local/bin/uv venv --python 3.12 /opt/venvs/admin && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+          COPY runtime/pyproject.toml runtime/uv.lock /tmp/runtime/
+          RUN cd /tmp/runtime && /usr/local/bin/uv venv --python 3.12 /opt/venvs/runtime && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+          COPY meeting/pyproject.toml meeting/uv.lock /tmp/meeting/
+          RUN cd /tmp/meeting && /usr/local/bin/uv venv --python 3.12 /opt/venvs/meeting && UV_PROJECT_ENVIRONMENT=/opt/venvs/meeting /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+          COPY gateway/pyproject.toml gateway/uv.lock /tmp/gateway/
+          RUN cd /tmp/gateway && /usr/local/bin/uv venv --python 3.12 /opt/venvs/gateway && UV_PROJECT_ENVIRONMENT=/opt/venvs/gateway /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+          COPY admin/src /app/admin-api/src
+          COPY runtime/src /app/runtime/src
+          COPY meeting/src /app/meeting-api/src
+          COPY meeting/contracts /app/meeting-api/meetings/contracts
+          COPY runtime/contracts /app/meeting-api/runtime/contracts
+          COPY meeting/routes.v1.json meeting/mcp.tools.v1.json /app/meeting-api/meetings/
+          COPY gateway/src /app/gateway/src
+          COPY gateway/manifests /app/gateway/core
+          COPY bin /usr/local/bin
+          COPY supervisord.meetings.conf /etc/supervisor/conf.d/vexa.conf
+          COPY meeting-entrypoint.py meeting-gateway.py /usr/local/bin/
+          COPY --from=valkey /opt/valkey/bin/valkey-server /opt/valkey/bin/valkey-cli /usr/local/bin/
+          COPY --from=valkey /valkey-COPYING /usr/local/share/valkey/LICENSE
+          # Remove worker image entrypoint and unsafe shared checkpoint directory; per-bot launcher owns fd9.
+          RUN rm -rf /app/storage/screenshots && ln -s /proc/self/fd/9 /app/storage/screenshots \
+              && chmod -R a+rX,go-w /ms-playwright \
+              && chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-runtime /usr/local/bin/bot-display /usr/local/bin/no-user-namespaces \
+              && mkdir -p /var/log/supervisor /var/lib/redis /var/lib/vexa/state /var/lib/vexa-runtime/logs /workspaces \
+              && chmod 0700 /var/lib/redis /var/lib/vexa/state /var/lib/vexa-runtime/logs \
+              && rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway
+          # No Docker socket, host credential mount, model CLI, UI terminal or agent service.
+          # Process runtime needs root inside this container to allocate separate bot UIDs; bots drop to nonroot.
+          ENV HOME=/root
+          EXPOSE 8056
+          ENTRYPOINT ["tini", "--", "python3", "/usr/local/bin/meeting-entrypoint.py"]
+          LABS_REVIEWED_SOURCE
+          cat > "$RUNNER_TEMP/labs-build-tools/github-arm-build.py" <<'LABS_REVIEWED_SOURCE'
+          #!/usr/bin/env python3
+          """Unexecuted bounded GitHub-runner build/synthetic smoke. Never logs in or pushes."""
+          import json,os,platform,signal,subprocess,sys,time
+          from pathlib import Path
+          G=1024**3
+          
+          def sample(path):
+              disk=os.statvfs(path)
+              mem={k:int(v.split()[0])*1024 for k,v in (x.split(':',1) for x in Path('/proc/meminfo').read_text().splitlines())}
+              return {'free':disk.f_bavail*disk.f_frsize,'available':mem['MemAvailable'],'swap_used':mem['SwapTotal']-mem['SwapFree']}
+          
+          def reason(row,start):
+              if row['free']<10*G:return 'disk-floor'
+              if start['free']-row['free']>20*G:return 'disk-growth'
+              if row['available']<G:return 'ram-floor'
+              if row['swap_used']-start['swap_used']>256*1024**2:return 'swap-growth'
+              return None
+          
+          def bounded(command,seconds,path,start,*,builder=None,log='command.log'):
+              began=time.monotonic()
+              with open(log,'w') as output:
+                  child=subprocess.Popen(command,stdout=output,stderr=subprocess.STDOUT,start_new_session=True,env={k:v for k,v in os.environ.items() if k not in {'GH_TOKEN','GITHUB_TOKEN'}})
+                  try:
+                      while child.poll() is None:
+                          row=sample(path);stop=reason(row,start)
+                          with open('resource-samples.jsonl','a') as stream:stream.write(json.dumps({**row,'elapsed':time.monotonic()-began,'reason':stop})+'\n')
+                          if stop:raise RuntimeError(stop)
+                          if time.monotonic()-began>=seconds:raise TimeoutError('bounded-stage-timeout')
+                          try:child.wait(timeout=5)
+                          except subprocess.TimeoutExpired:pass
+                      if child.returncode:raise RuntimeError('command-failed:'+str(child.returncode))
+                  except BaseException:
+                      if builder:
+                          try:subprocess.run(['docker','buildx','stop',builder],timeout=25,check=False)
+                          except (OSError,subprocess.TimeoutExpired):pass
+                      try:os.killpg(child.pid,signal.SIGTERM)
+                      except ProcessLookupError:pass
+                      try:child.wait(timeout=15)
+                      except subprocess.TimeoutExpired:
+                          os.killpg(child.pid,signal.SIGKILL);child.wait(timeout=5)
+                      raise
+              row=sample(path)
+              if reason(row,start):raise RuntimeError('poststage-'+reason(row,start))
+          
+          
+          def validate_image(info):
+              if info.get('Architecture')!='arm64' or info.get('Os')!='linux':raise RuntimeError('image-platform-mismatch')
+              config=info.get('Config',{})
+              if config.get('User') not in ('root','0','0:0','root:root'):raise RuntimeError('image-control-user-mismatch')
+              if config.get('Entrypoint')!=['tini','--','python3','/usr/local/bin/meeting-entrypoint.py']:raise RuntimeError('image-tini-entrypoint-mismatch')
+          
+          def validate_synthetic_output(text):
+              # Exactly one JSON record from the reviewed payload. Import success alone is insufficient.
+              lines=[line for line in text.splitlines() if line.strip()]
+              if len(lines)!=1:raise RuntimeError('synthetic-output-count')
+              try:result=json.loads(lines[0])
+              except (ValueError,TypeError):raise RuntimeError('synthetic-output-malformed') from None
+              expected={'scope':'synthetic-image-imports-only','real_meet':False,'provider_calls':False,'results':{'admin':'import-pass','meeting':'import-pass','runtime':'import-pass','synthetic-key':True,'gateway':'8-route-assembly-pass','runtime-env':'runtime-env-cleared-pass'}}
+              # Identity checks prevent integer zero from masquerading as false/true.
+              if result!=expected or result.get('real_meet') is not False or result.get('provider_calls') is not False or result.get('results',{}).get('synthetic-key') is not True:raise RuntimeError('synthetic-output-contract')
+              return result
+          
+          def record_passed(image_id,start,context):
+              validate_synthetic_output(Path('synthetic.log').read_text())
+              if reason(sample(context),start):raise RuntimeError('post-smoke-resource-threshold')
+              Path('BUILD-AND-SYNTHETIC-PASSED').write_text(image_id+'\n')
+          
+          def cleanup(command):
+              try:subprocess.run(command,timeout=30,check=False)
+              except (OSError,subprocess.TimeoutExpired):pass
+          
+          def interrupted(signum,frame):
+              raise InterruptedError('runner-cancellation')
+          
+          def main(context,image):
+              if platform.machine()!='aarch64' or os.environ.get('GITHUB_ACTIONS')!='true':raise RuntimeError('Ephemeral native ARM Actions runner required')
+              context=str(Path(context).resolve()); start=sample(context)
+              if start['free']<30*G or start['available']<6*G:raise RuntimeError('fresh-start-capacity-too-small')
+              docker_root=subprocess.check_output(['docker','info','--format','{{.DockerRootDir}}'],text=True,timeout=25).strip()
+              if os.stat(context).st_dev!=os.stat(docker_root).st_dev:raise RuntimeError('separate-Docker-filesystem-not-covered')
+              builder='labs-arm-'+os.environ['GITHUB_RUN_ID']; started=time.monotonic()
+              try:
+                  subprocess.run(['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','memory=5g','--driver-opt','memory-swap=5g','--driver-opt','cpu-period=100000','--driver-opt','cpu-quota=200000'],check=True,timeout=30)
+                  bounded(['docker','buildx','inspect','--bootstrap',builder],120,context,start,builder=builder,log='bootstrap.log')
+                  limits=subprocess.check_output(['docker','inspect','buildx_buildkit_'+builder+'0','--format','{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.CpuPeriod}} {{.HostConfig.CpuQuota}}'],text=True,timeout=25).strip()
+                  if limits!='5368709120 5368709120 100000 200000':raise RuntimeError('builder-limits-mismatch')
+                  bounded(['docker','buildx','build','--builder',builder,'--platform','linux/arm64','--target','meetings','--load','--provenance=false','--sbom=false','--label','org.opencontainers.image.source=https://github.com/latharrr/labs-meet-companion','--progress','plain','--tag',image,'-f',context+'/Dockerfile.labs-github-arm',context],max(1,2700-(time.monotonic()-started)),context,start,builder=builder,log='build.log')
+                  info=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True,timeout=25))[0]
+                  validate_image(info)
+                  Path('resource-baseline.json').write_text(json.dumps(start)+'\n')
+                  Path('image-inspect.json').write_text(json.dumps(info,indent=2)+'\n')
+                  # No service started, host mounts, Docker socket, credentials or provider traffic.
+                  # stdin supplies reviewed synthetic-only payload without host bind mounts.
+                  with open(context+'/synthetic-image-check.py') as payload,open('synthetic.log','w') as output:
+                      subprocess.run(['docker','run','--rm','--interactive','--name','labs-synthetic-'+os.environ['GITHUB_RUN_ID'],'--network','none','--memory','1g','--memory-swap','1g','--cpus','1','--pids-limit','128','--entrypoint','tini',image,'--','python3','-'],stdin=payload,stdout=output,stderr=subprocess.STDOUT,check=True,timeout=150)
+                  record_passed(info['Id'],start,context)
+              finally:
+                  # Scoped cleanup only, never daemon/global prune or existing services.
+                  cleanup(['docker','rm','-f','labs-synthetic-'+os.environ['GITHUB_RUN_ID']])
+                  cleanup(['docker','buildx','rm','--force',builder])
+          
+          if __name__=='__main__':
+              signal.signal(signal.SIGTERM,interrupted);signal.signal(signal.SIGINT,interrupted)
+              main(*sys.argv[1:])
+          LABS_REVIEWED_SOURCE
+          cat > "$RUNNER_TEMP/labs-build-tools/meeting-entrypoint.py" <<'LABS_REVIEWED_SOURCE'
+          #!/usr/bin/env python3
+          """Meeting-only entrypoint. Reads deployment secrets; never mints/prints keys.
+          Not validated in a built image yet. No host mounts or account auto-discovery.
+          """
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+          from urllib.parse import quote
+          
+          FORBIDDEN = ('ANTHROPIC_', 'CLAUDE_', 'HOST_CLAUDE', 'VEXA_MODEL_SECRET_', 'LABS_RESEND_', 'LABS_OPENWA_', 'LABS_AI_')
+          REQUIRED = ('DB_HOST','DB_PORT','DB_NAME','DB_USER','DB_PASSWORD','REDIS_PASSWORD','ADMIN_API_TOKEN','INTERNAL_API_SECRET','RUNTIME_API_TOKEN','VEXA_TERMINAL_SESSION_SECRET')
+          
+          
+          def environment(source):
+              env={k:v for k,v in source.items() if not any(k.startswith(prefix) for prefix in FORBIDDEN)}
+              for key in REQUIRED:
+                  if not env.get(key): raise ValueError('Required deployment field missing: '+key)
+              for key in ('DB_PASSWORD','REDIS_PASSWORD','ADMIN_API_TOKEN','INTERNAL_API_SECRET','RUNTIME_API_TOKEN','VEXA_TERMINAL_SESSION_SECRET'):
+                  if len(env[key])<32 or not re.fullmatch(r'[A-Za-z0-9_-]+',env[key]):raise ValueError('Use separately provisioned URL-safe random deployment secret for '+key)
+              # No extra env-file inherited by child programs. Only explicit declared fields.
+              defaults={'LOG_LEVEL':'info','DEFAULT_BOT_NAME':'Lathar Labs | Notes','DEFAULT_TRANSCRIPTION_LANGUAGE':'','DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES':'','TRANSCRIPTION_SERVICE_URL':'','TRANSCRIPTION_SERVICE_TOKEN':'','TRANSCRIPTION_MODEL':'whisper-large-v3-turbo','MINIO_ENDPOINT':'','MINIO_ACCESS_KEY':'','MINIO_SECRET_KEY':'','MINIO_BUCKET':'labs-meet','MINIO_SECURE':'false','GUARD_ENABLED':'true','GUARD_WS_ENABLED':'false','VEXA_LITE_STATE_DIR':'/var/lib/vexa/state','BOT_COMMAND':'/usr/local/bin/vexa-bot-launch'}
+              defaults.update({k:env[k] for k in defaults if k in env})
+              defaults.update({k:env[k] for k in REQUIRED})
+              defaults.update({'PATH':'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','HOME':'/root','LANG':'C.UTF-8','PYTHONUNBUFFERED':'1','PLAYWRIGHT_BROWSERS_PATH':'/ms-playwright','RUNTIME_BACKEND':'process','AGENT_WORKER_COMMAND':'/usr/bin/false','HOST_CLAUDE_CREDENTIALS':'','AGENT_API_URL':'','MCP_URL':'','VEXA_LLM_KILL_SWITCH':'1','REDIS_URL':'redis://:'+quote(env['REDIS_PASSWORD'],safe='')+'@127.0.0.1:6379/0'})
+              # Do not allow operator configuration to redirect the launcher or key directory.
+              defaults['BOT_COMMAND']='/usr/local/bin/vexa-bot-launch'
+              defaults['VEXA_LITE_STATE_DIR']='/var/lib/vexa/state'
+              for name,value in defaults.items():
+                  if any(c in value for c in ('\n','\r','\x00','%','"','\\')):
+                      raise ValueError('Unsupported deployment field characters: '+name)
+              return defaults
+          
+          
+          def main():
+              env=environment(os.environ)
+              token=env.pop('RUNTIME_API_TOKEN')
+              for name,mode in [('/run/vexa',0o700),('/var/log/supervisor',0o700),('/var/lib/redis',0o700),('/var/lib/vexa/state/identity',0o700),('/var/lib/vexa-runtime/logs',0o700),('/tmp/.X11-unix',0o1777)]:
+                  Path(name).mkdir(parents=True,exist_ok=True,mode=mode);os.chmod(name,mode)
+              subprocess.run(['/opt/venvs/gateway/bin/python','/app/gateway/src/gateway/identity_token.py','keygen','/var/lib/vexa/state/identity/signing-key.pem','/var/lib/vexa/state/identity/public-key.pem'],env=env,check=True)
+              # Bounded DB readiness. Never start services against an unready DB.
+              import time
+              for attempt in range(30):
+                  check=subprocess.run(['pg_isready','-q','-h',env['DB_HOST'],'-p',env['DB_PORT'],'-U',env['DB_USER']],env=env)
+                  if check.returncode==0:break
+                  if attempt==29:raise RuntimeError('PostgreSQL not ready')
+                  time.sleep(2)
+              from_config=Path('/etc/supervisor/conf.d/vexa.conf').read_text()
+              if '@RUNTIME_API_TOKEN@' not in from_config:raise RuntimeError('Supervisor runtime token placeholder missing')
+              config_pattern=re.compile(r'%\(ENV_([A-Z0-9_]+)\)s')
+              if any(name not in env for name in config_pattern.findall(from_config)):raise RuntimeError('Supervisor required environment missing')
+              rendered=from_config.replace('@RUNTIME_API_TOKEN@',token)
+              config=Path('/run/vexa/supervisord.conf');config.write_text(rendered);os.chmod(config,0o600)
+              valkey=Path('/run/vexa/valkey.conf');valkey.write_text('requirepass "'+env.pop('REDIS_PASSWORD')+'"\n');os.chmod(valkey,0o600)
+              # Auth/bootstrap is an explicit host-local operation after startup; no printed
+              # self-host key or sign-in link, no mail, no agent session DB/bucket provisioning.
+              os.execve('/usr/bin/supervisord',['supervisord','-n','-c',str(config)],env)
+          
+          
+          if __name__=='__main__':
+              try:main()
+              except (ValueError,RuntimeError,OSError,subprocess.CalledProcessError):
+                  print('Meeting-only startup refused. Check private deployment configuration.',file=sys.stderr);sys.exit(1)
+          LABS_REVIEWED_SOURCE
+          cat > "$RUNNER_TEMP/labs-build-tools/meeting-gateway.py" <<'LABS_REVIEWED_SOURCE'
+          """Minimal companion gateway. All upstream authentication checks remain intact."""
+          from gateway.adapters import build_production_app
+          
+          ALLOWED = {
+              '/health': {'GET'},
+              '/auth/me': {'GET'},
+              '/bots': {'POST'},
+              '/bots/{platform}/{native_meeting_id}': {'DELETE'},
+              '/bots/{platform}/{native_meeting_id}/chat': {'POST'},
+              '/bots/{platform}/{native_meeting_id}/chat/{request_id}': {'GET'},
+              '/transcripts/{platform}/{native_meeting_id}': {'GET'},
+              '/transcripts/by-id/{meeting_id}': {'GET'},
+          }
+          
+          
+          def make_app():
+              app = build_production_app()
+              # Pinned gateway requires MCP manifest even with no MCP_URL. Assemble normally,
+              # then retain only companion HTTP methods/paths. No docs, WS, share, calendar,
+              # agent, MCP, bot sign-in, speak, model or arbitrary-user-settings endpoints.
+              routes=[]
+              for route in app.router.routes:
+                  wanted=ALLOWED.get(getattr(route,'path',''))
+                  if wanted:
+                      methods=set(getattr(route,'methods',())) & wanted
+                      if methods:
+                          route.methods=methods
+                          routes.append(route)
+              app.router.routes[:]=routes
+              app.openapi_schema=None
+              if {r.path for r in routes} != set(ALLOWED):
+                  raise RuntimeError('Pinned companion gateway route contract changed')
+              return app
+          
+          
+          if __name__ == '__main__':
+              import uvicorn
+              uvicorn.run(make_app(), host='0.0.0.0', port=8056, access_log=False)
+          LABS_REVIEWED_SOURCE
+          cat > "$RUNNER_TEMP/labs-build-tools/prepare-github-arm.py" <<'LABS_REVIEWED_SOURCE'
+          #!/usr/bin/env python3
+          """Offline-only, exact-source combined build-context generator. Does not build/push."""
+          import hashlib,json,shlex,subprocess,sys,tarfile,tempfile
+          from pathlib import Path
+          PIN='6b26f7b921756d6db128d42cd70b4b7046381407'
+          HERE=Path(__file__).resolve().parent
+          
+          def generate(source,destination):
+              source=Path(source).resolve(); destination=Path(destination).resolve()
+              if destination.exists():raise ValueError('Destination must be new')
+              if subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()!=PIN:raise ValueError('Pinned source required')
+              if subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=no'],text=True).strip():raise ValueError('Tracked source modifications refused')
+              destination.mkdir(mode=0o700,parents=True)
+              # git archive ignores local working-tree edits and untracked material.
+              with tempfile.TemporaryFile() as archive:
+                  subprocess.run(['git','-C',str(source),'archive','--format=tar',PIN],stdout=archive,check=True)
+                  archive.seek(0)
+                  with tarfile.open(fileobj=archive) as tar:
+                      if any(not (m.isfile() or m.isdir()) for m in tar.getmembers()):raise ValueError('Unexpected link/special source member')
+                      tar.extractall(destination,filter='data')
+              env=(destination/'core/meetings/modules/join/Dockerfile.env').read_text()
+              bot=(destination/'core/meetings/services/bot/Dockerfile').read_text()
+              if env.count('\nFROM ')!=1 or bot.count('FROM vexa/meet-join-env:dev')!=2:raise ValueError('Upstream stage contract changed')
+              lines=env.splitlines()
+              for i,line in enumerate(lines):
+                  if line.startswith('FROM '):lines[i]=line+' AS labs-join-env';break
+              bot=bot.replace('FROM vexa/meet-join-env:dev','FROM labs-join-env')
+              if bot.count('FROM labs-join-env AS runtime')!=1:raise ValueError('Worker runtime contract changed')
+              bot=bot.replace('FROM labs-join-env AS runtime','FROM labs-join-env AS bot')
+              # Generator verifies HEAD in its input, but reads only tracked files needed below.
+              derivative=destination/'labs_meet_derivative'
+              subprocess.run([sys.executable,str(HERE/'prepare-meeting-only.py'),str(source),str(derivative)],check=True)
+              tail=[]
+              for line in (derivative/'Dockerfile').read_text().splitlines():
+                  if line.startswith('COPY ') and not line.startswith('COPY --from='):
+                      tokens=shlex.split(line)
+                      if len(tokens)<3 or any(x.startswith('--') for x in tokens[1:]):raise ValueError('Unexpected COPY syntax')
+                      line='COPY '+' '.join('labs_meet_derivative/'+x for x in tokens[1:-1])+' '+tokens[-1]
+                  tail.append(line)
+              text='# syntax=docker/dockerfile:1.7\n'+'\n'.join(lines)+'\n'+bot.replace('# syntax=docker/dockerfile:1.7','')+'\n'+'\n'.join(tail)+'\n'
+              (destination/'Dockerfile.labs-github-arm').write_text(text)
+              (destination/'synthetic-image-check.py').write_bytes((HERE/'synthetic-image-check.py').read_bytes())
+              inventory={str(p.relative_to(destination)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(destination.rglob('*')) if p.is_file()}
+              (destination/'LABS-CONTEXT-SHA256.json').write_text(json.dumps(inventory,sort_keys=True,indent=2)+'\n')
+              print(json.dumps({'source_pin':PIN,'files':len(inventory),'dockerfile_sha256':hashlib.sha256(text.encode()).hexdigest(),'scope':'generated-only-not-built'}))
+          
+          if __name__=='__main__':generate(*sys.argv[1:])
+          LABS_REVIEWED_SOURCE
+          cat > "$RUNNER_TEMP/labs-build-tools/prepare-meeting-only.py" <<'LABS_REVIEWED_SOURCE'
+          #!/usr/bin/env python3
+          """Prepare a meeting-only supervisor/config review tree from an exact Vexa checkout.
+          Does not build, run, install, provision secrets or modify the upstream checkout.
+          Output is a review artifact, not a deployment-ready stack.
+          """
+          import configparser
+          import shutil
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+          
+          PIN='6b26f7b921756d6db128d42cd70b4b7046381407'
+          KEEP={'redis','admin-api','runtime','meeting-api','gateway'}
+          
+          
+          def supervisor(text):
+              config=configparser.ConfigParser(interpolation=None,strict=True)
+              config.read_string(text)
+              for section in list(config.sections()):
+                  if section.startswith('program:') and section[8:] not in KEEP:
+                      config.remove_section(section)
+              for section in config.sections():
+                  if section.startswith('group:'):
+                      config[section]['programs']=', '.join(sorted(KEEP))
+              config['program:runtime']['environment']=config['program:runtime']['environment'].replace('AGENT_WORKER_COMMAND="%(ENV_AGENT_WORKER_COMMAND)s"','AGENT_WORKER_COMMAND="/usr/bin/false"').replace('HOST_CLAUDE_CREDENTIALS="%(ENV_HOST_CLAUDE_CREDENTIALS)s"','HOST_CLAUDE_CREDENTIALS=""')
+              config['program:gateway']['command']='/usr/local/bin/no-user-namespaces /opt/venvs/gateway/bin/python /usr/local/bin/meeting-gateway.py'
+              config['program:gateway']['environment']=config['program:gateway']['environment'].replace('AGENT_API_URL="http://localhost:8100"','AGENT_API_URL=""').replace('MCP_URL="http://localhost:8010"','MCP_URL=""')
+              return config
+          
+          
+          def main():
+              root=Path(sys.argv[1]).resolve();dest=Path(sys.argv[2]).resolve()
+              sha=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+              if sha!=PIN:raise ValueError('Exact audited source required')
+              if dest.exists():raise ValueError('Output directory must be new')
+              config=supervisor((root/'deploy/lite/supervisord.conf').read_text())
+              dest.mkdir(mode=0o700,parents=True)
+              with (dest/'supervisord.meetings.conf').open('w') as f:config.write(f)
+              env='\n'.join(v for section in config.sections() for v in config[section].values())
+              names=sorted(set(re.findall(r'%\(ENV_([A-Z0-9_]+)\)s',env)))
+              (dest/'required-environment.txt').write_text('\n'.join(names)+'\n')
+              for file in ('meeting-entrypoint.py','meeting-gateway.py'):
+                  shutil.copy2(Path(__file__).parent/file,dest/file)
+              paths={'admin':'core/identity/services/admin-api','runtime':'core/runtime','meeting':'core/meetings/services/meeting-api','gateway':'core/gateway/services/gateway'}
+              for name,relative in paths.items():
+                  source=root/relative;target=dest/name;target.mkdir()
+                  for file in ('pyproject.toml','uv.lock'):shutil.copy2(source/file,target/file)
+                  shutil.copytree(source/'src',target/'src',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+              shutil.copytree(root/'core/meetings/contracts',dest/'meeting/contracts')
+              shutil.copytree(root/'core/runtime/contracts',dest/'runtime/contracts')
+              for file in ('routes.v1.json','mcp.tools.v1.json'):shutil.copy2(root/'core/meetings'/file,dest/'meeting'/file)
+              # Gateway currently requires MCP manifest even with no MCP service. Wrapper removes its routes.
+              for file in ('core/gateway/services/gateway/routes.v1.json','core/meetings/routes.v1.json','core/identity/routes.v1.json','core/gateway/services/mcp/routes.v1.json'):
+                  target=dest/'gateway/manifests'/file.removeprefix('core/');target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(root/file,target)
+              (dest/'bin').mkdir()
+              for file in ('vexa-bot-launch','vexa-runtime','bot-display','no-user-namespaces'):shutil.copy2(root/'deploy/lite/bin'/file,dest/'bin'/file)
+              for file in ('LICENSE','NOTICE'):
+                  if (root/file).is_file():shutil.copy2(root/file,dest/file)
+              lite=(root/'deploy/lite/Dockerfile.lite').read_text()
+              # Preserve the pinned/checksummed Valkey builder, never copy stock agent/terminal stages.
+              start=lite.index('FROM mcr.microsoft.com/playwright:',lite.index('# Stage 2c:'))
+              end=lite.index('# Stage 3:',start)
+              stage=lite[start:end].replace(' AS valkey-builder',' AS valkey').replace('-j"$(nproc)"','-j1')
+              template=(Path(__file__).parent/'Dockerfile.meetings.template').read_text()
+              template=template.replace('FROM bot AS meetings',stage+'\nFROM bot AS meetings')
+              uv_start=lite.index('ARG UV_VERSION=')
+              uv_end=lite.index('ENV UV_LINK_MODE=',uv_start)
+              template=template.replace('@UV_INSTALL@',lite[uv_start:uv_end])
+              (dest/'Dockerfile').write_text(template)
+              (dest/'.dockerignore').write_text('__pycache__/\n*.pyc\n*.env\n.git/\n')
+          
+              (dest/'REVIEW-NOT-READY.md').write_text('Meeting-only supervisor generated from pinned Vexa. No agent/terminal/model-proxy/MCP programs. This is not a bootable/deployable image. Dockerfile/entrypoint/context generated but NOT BUILT. Remaining: native build audit, internal key provisioning, PostgreSQL/storage init, one-bot quota, no-provider real-contract tests. Do not execute stock Lite entrypoint or make target.\n')
+              print(dest)
+          
+          if __name__=='__main__':main()
+          LABS_REVIEWED_SOURCE
+          cat > "$RUNNER_TEMP/labs-build-tools/publish-private-arm.py" <<'LABS_REVIEWED_SOURCE'
+          #!/usr/bin/env python3
+          """PROPOSED private GHCR publication, not authorization. Requires reviewed workflow."""
+          import importlib.util,json,os,re,subprocess,sys,tempfile,urllib.error,urllib.request
+          from pathlib import Path
+          
+          def api(path,*,absent=False):
+              request=urllib.request.Request('https://api.github.com/'+path,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'})
+              try:
+                  with urllib.request.urlopen(request,timeout=25) as response:return json.load(response)
+              except urllib.error.HTTPError as error:
+                  if error.code==404 and absent:return None
+                  raise RuntimeError('GitHub metadata check failed HTTP '+str(error.code)) from None
+          
+          def main():
+              if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('GITHUB_RUN_ATTEMPT')!='1':raise RuntimeError('Only first manual Actions attempt allowed')
+              owner,repo=os.environ['GITHUB_REPOSITORY'].split('/')
+              run=os.environ['GITHUB_RUN_ID'];sha=os.environ['GITHUB_SHA']
+              if owner!='latharrr' or repo!='labs-meet-companion' or not re.fullmatch(r'[0-9]+',run) or not re.fullmatch(r'[0-9a-f]{40}',sha):raise RuntimeError('Unexpected publication identity')
+              name='labs-meet-arm-'+run;image='ghcr.io/'+owner+'/'+name+':'+sha
+              metadata=api('repos/'+owner+'/'+repo)
+              if metadata.get('private') is not False:raise RuntimeError('Public repository required for approved free standard runner route')
+              if api('users/'+owner+'/packages/container/'+name,absent=True) is not None:raise RuntimeError('Fresh package namespace required; no overwrite')
+              if not Path('BUILD-AND-SYNTHETIC-PASSED').exists():raise RuntimeError('Build/synthetic evidence missing')
+              info=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True,timeout=25))[0]
+              if Path('BUILD-AND-SYNTHETIC-PASSED').read_text().strip()!=info['Id']:raise RuntimeError('Image differs from checked image')
+              if info.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.source')!='https://github.com/'+owner+'/'+repo:raise RuntimeError('Source label missing')
+              spec=importlib.util.spec_from_file_location('guard',str(Path(__file__).with_name('github-arm-build.py')));guard=importlib.util.module_from_spec(spec);spec.loader.exec_module(guard)
+              start=json.loads(Path('resource-baseline.json').read_text());context=os.environ['RUNNER_TEMP']
+              if guard.reason(guard.sample(context),start):raise RuntimeError('Prepush capacity threshold')
+              with tempfile.TemporaryDirectory(prefix='labs-ghcr-',dir=context) as directory:
+                  env={**os.environ,'DOCKER_CONFIG':directory};token=env.pop('GH_TOKEN')
+                  with open('registry-login.log','w') as output:
+                      subprocess.run(['docker','login','ghcr.io','--username',owner,'--password-stdin'],input=token+'\n',text=True,stdout=output,stderr=subprocess.STDOUT,env=env,check=True,timeout=30)
+                  # Parent environment lacks credentials except this temporary config; build already ended.
+                  previous=os.environ.get('DOCKER_CONFIG');os.environ['DOCKER_CONFIG']=directory
+                  try:guard.bounded(['docker','push',image],480,context,start,log='registry-push.log')
+                  finally:
+                      if previous is None:os.environ.pop('DOCKER_CONFIG',None)
+                      else:os.environ['DOCKER_CONFIG']=previous
+              package=api('users/'+owner+'/packages/container/'+name)
+              if package['visibility']!='private' or package.get('repository',{}).get('full_name')!=owner+'/'+repo:raise RuntimeError('Published package audience/association unverified: stop and report')
+              info=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True,timeout=25))[0]
+              digests=[d for d in info.get('RepoDigests',[]) if d.startswith('ghcr.io/'+owner+'/'+name+'@sha256:')]
+              if len(digests)!=1:raise RuntimeError('Registry digest unverified')
+              Path('PRIVATE-IMAGE-RESULT.json').write_text(json.dumps({'image':image,'digest':digests[0],'package_url':package['html_url'],'visibility':'private','source_commit':sha},indent=2)+'\n')
+              print(Path('PRIVATE-IMAGE-RESULT.json').read_text())
+          
+          if __name__=='__main__':main()
+          LABS_REVIEWED_SOURCE
+          cat > "$RUNNER_TEMP/labs-build-tools/synthetic-image-check.py" <<'LABS_REVIEWED_SOURCE'
+          #!/usr/bin/env python3
+          """Planned isolated image smoke payload. Not approval to start a container.
+          No provider/DB/Redis/HTTP call. Uses synthetic-only environment/keyfiles, validates
+          real image service imports, reduced gateway routes and cleared runtime env.
+          Run with networking NONE in disposable reviewed image, tini PID1 and scoped limits.
+          """
+          import json,os,subprocess,sys,tempfile
+          from pathlib import Path
+          
+          
+          def run(python,code,env):
+              result=subprocess.run([python,'-c',code],env=env,capture_output=True,text=True,timeout=20)
+              if result.returncode:raise RuntimeError('Synthetic service check failed: '+python+' exit'+str(result.returncode))
+              return result.stdout.strip()
+          
+          
+          def main():
+              assert sys.platform=='linux'
+              assert Path('/usr/bin/tini').exists()
+              for absent in ('/var/run/docker.sock','/app/agent','/app/terminal','/app/mcp'):
+                  assert not Path(absent).exists(),absent
+              conf=Path('/etc/supervisor/conf.d/vexa.conf').read_text()
+              import configparser
+              config=configparser.ConfigParser(interpolation=None);config.read_string(conf)
+              expected={'redis','admin-api','runtime','meeting-api','gateway'}
+              assert {s[8:] for s in config.sections() if s.startswith('program:')}==expected
+              assert set(config['group:vexa']['programs'].replace(' ','').split(','))==expected
+              base={'PATH':'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','HOME':'/tmp','INTERNAL_API_SECRET':'synthetic-only-internal-'+40*'x','GUARD_ENABLED':'false','MCP_URL':'','AGENT_API_URL':''}
+              results={}
+              for name,source,module in [('admin','admin-api','admin_api.app.main'),('meeting','meeting-api','meeting_api'),('runtime','runtime','runtime_kernel')]:
+                  env={**base,'PYTHONPATH':'/app/'+source+'/src'}
+                  code='import '+module+'; print("import-pass")'
+                  results[name]=run('/opt/venvs/'+name+'/bin/python',code,env)
+              with tempfile.TemporaryDirectory(prefix='labs-synthetic-key-') as directory:
+                  private=str(Path(directory)/'private.pem');public=str(Path(directory)/'public.pem')
+                  results['synthetic-key']=subprocess.run(['/opt/venvs/gateway/bin/python','/app/gateway/src/gateway/identity_token.py','keygen',private,public],env=base,capture_output=True,timeout=20).returncode==0
+                  assert results['synthetic-key']
+                  env={**base,'PYTHONPATH':'/app/gateway/src','VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE':private}
+                  results['gateway']=run('/opt/venvs/gateway/bin/python', '''import importlib.util
+          s=importlib.util.spec_from_file_location('w','/usr/local/bin/meeting-gateway.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+          a=m.make_app();assert len(a.routes)==8;assert {r.path for r in a.routes}==set(m.ALLOWED)
+          print('8-route-assembly-pass')''',env)
+              results['runtime-env']=run('/opt/venvs/runtime/bin/python', '''import importlib.machinery,importlib.util
+          loader=importlib.machinery.SourceFileLoader('launcher','/usr/local/bin/vexa-runtime');s=importlib.util.spec_from_loader('launcher',loader);m=importlib.util.module_from_spec(s);loader.exec_module(m)
+          e=m.runtime_environment({'DB_PASSWORD':'DO-NOT-INHERIT','ADMIN_API_TOKEN':'DO-NOT-INHERIT','LABS_RESEND_KEY':'DO-NOT-INHERIT','ANTHROPIC_API_KEY':'DO-NOT-INHERIT','PATH':'/usr/bin','PYTHONPATH':'/app/runtime/src','RUNTIME_BACKEND':'process'},'/app/runtime/src')
+          assert 'DO-NOT-INHERIT' not in str(e);assert e['RUNTIME_BACKEND']=='process'
+          print('runtime-env-cleared-pass')''',{**base,'PYTHONPATH':'/app/runtime/src'})
+              print(json.dumps({'scope':'synthetic-image-imports-only','real_meet':False,'provider_calls':False,'results':results}))
+          
+          
+          if __name__=='__main__':
+              try:main()
+              except Exception as error:
+                  print('Synthetic image check failed: '+type(error).__name__,file=sys.stderr);sys.exit(1)
+          LABS_REVIEWED_SOURCE
+      - name: Prepare exact upstream and build context without secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/vexa"
+          git -C "$RUNNER_TEMP/vexa" fetch --depth=1 https://github.com/Vexa-ai/vexa.git 6b26f7b921756d6db128d42cd70b4b7046381407
+          git -C "$RUNNER_TEMP/vexa" checkout --detach FETCH_HEAD
+          python3 "$RUNNER_TEMP/labs-build-tools/prepare-github-arm.py" "$RUNNER_TEMP/vexa" "$RUNNER_TEMP/context"
+      - name: Bounded native build and no-network synthetic check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/labs-build-tools/github-arm-build.py" "$RUNNER_TEMP/context" "ghcr.io/latharrr/labs-meet-arm-${GITHUB_RUN_ID}:${GITHUB_SHA}"
+      - name: Publish only the checked final image privately
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/labs-build-tools/publish-private-arm.py"
+      - name: Write concise outcome and scoped cleanup
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          test ! -f PRIVATE-IMAGE-RESULT.json || cat PRIVATE-IMAGE-RESULT.json >> "$GITHUB_STEP_SUMMARY"
+          for log in bootstrap.log build.log synthetic.log resource-samples.jsonl registry-push.log; do
+            test ! -f "$log" || { printf "\n=== %s ===\n" "$log"; tail -n 80 "$log"; }
+          done
+          docker rm -f "labs-synthetic-${GITHUB_RUN_ID}"
+          docker buildx rm --force "labs-arm-${GITHUB_RUN_ID}"
