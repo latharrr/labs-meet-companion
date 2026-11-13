@@ -1,0 +1,32 @@
+# OFFLINE proposal. Do not install/run without the owner's scoped CI approval.
+# Manual runner capability probe only: no checkout, build, secrets, packages,
+# artifacts, workflow writes, VPS connection or provider calls.
+name: ARM runner capability probe
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: labs-arm-runner-probe
+  cancel-in-progress: false
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 2
+    steps:
+      - name: Read ephemeral runner capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ $(uname -m) == aarch64 ]]
+          python3 - <<'PY'
+          import json,os,platform
+          from pathlib import Path
+          mem={k:int(v.split()[0]) for k,v in (line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines())}
+          fs=os.statvfs(os.environ['RUNNER_TEMP'])
+          print(json.dumps({'architecture':platform.machine(),'cpu_count':os.cpu_count(),'available_memory_bytes':mem['MemAvailable']*1024,'temp_free_bytes':fs.f_bavail*fs.f_frsize,'purpose':'read-only-capacity-probe-no-build'}))
+          PY
+          command -v docker
+          docker version --format '{{json .}}'
+          docker buildx version
+          docker info --format '{"driver":{{json .Driver}},"architecture":{{json .Architecture}},"docker_root":{{json .DockerRootDir}}}'
+          df -B1 "$RUNNER_TEMP" /var/lib/docker
