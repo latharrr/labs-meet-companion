@@ -1,3 +1,5 @@
+> HISTORICAL LOCAL/LEGACY REFERENCE. Read [current status](STATUS.md) first. Engine not running; same-host-network-namespace second-daemon route is withdrawn. Earlier build/auth/hostname statements below are historical, not current readiness or permission to start anything.
+
 # Operations and safety
 
 ## Scope

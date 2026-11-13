@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Lathar Labs meeting workspace. Read the record, check the evidence, and review what goes out.">
+<title>Lathar Labs - Meeting workspace</title>
+<link rel="stylesheet" href="workspace.css">
+<script src="workspace.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#workspace-heading">Skip to workspace</a>
+
+<aside class="rail" aria-label="About this workspace">
+  <div class="brand">LL<span>LATHAR LABS</span></div>
+  <h2>Meeting<br>workspace.</h2>
+  <p>Your meetings, your record.<br>Nothing is sent without review.</p>
+  <div class="rail-foot"><span class="dot" aria-hidden="true"></span> bot.143.lat<br><small>Private workspace · Signed in</small></div>
+</aside>
+
+<main>
+  <header class="topbar">
+    <span class="crumb">LATHAR LABS / WORKSPACE</span>
+    <span class="badge">CUSTOMER WORKSPACE</span>
+    <button class="button button-ghost" id="logout-button" type="button">Log out</button>
+  </header>
+
+  <section class="workspace-title" aria-labelledby="workspace-heading">
+    <h1 id="workspace-heading">Your meetings</h1>
+    <p>Read the record. Check the evidence. Review what goes out - nothing is joined, posted, or sent without your approval.</p>
+  </section>
+
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+
+  <div class="notice notice-live" id="live-notice" hidden></div>
+  <div class="notice" id="ops-notice" hidden></div>
+
+  <div class="error-banner" id="error" role="alert" hidden>
+    <p id="error-text">Something went wrong loading your workspace. Try again.</p>
+    <button class="button" id="error-retry" type="button">Try again</button>
+  </div>
+
+  <div class="loading" id="loading" role="status">Loading your workspace...</div>
+
+  <div id="app" hidden>
+    <div class="toolbar">
+      <button class="button button-primary" id="add-meeting-button" type="button">Add a meeting</button>
+      <button class="button" id="refresh-button" type="button">Refresh</button>
+      <span class="toolbar-hint">Refresh loads the latest record. This page does not update itself.</span>
+    </div>
+
+    <section aria-labelledby="meetings-heading">
+      <div class="section-head">
+        <h2 id="meetings-heading">Meetings</h2>
+        <span class="count" id="meeting-count"></span>
+      </div>
+      <ul class="meeting-list" id="meeting-list"></ul>
+      <div class="empty" id="meetings-empty" hidden>
+        <p>No meetings yet.</p>
+        <p>Add a meeting to stage a join request for review. The bot does not join a call until you approve and execute it.</p>
+        <button class="button button-primary" id="empty-add-button" type="button">Add a meeting</button>
+      </div>
+    </section>
+
+    <section class="meeting-detail" id="meeting-detail" aria-labelledby="detail-title" hidden>
+      <div class="meeting-head">
+        <div>
+          <p class="kicker" id="detail-kicker"></p>
+          <h2 id="detail-title"></h2>
+          <p class="detail-meta" id="detail-meta"></p>
+          <p class="detail-consent" id="detail-consent"></p>
+        </div>
+        <span class="tag" id="detail-status"></span>
+      </div>
+
+      <div class="actions" id="detail-actions">
+        <button class="button" id="sync-button" type="button">Refresh transcript</button>
+        <button class="button" id="leave-button" type="button">Stage leave</button>
+      </div>
+
+      <nav class="tabs" role="tablist" aria-label="Meeting record">
+        <button class="tab active" id="tab-notes" role="tab" aria-selected="true" aria-controls="panel-notes" data-tab="notes" type="button">Meeting notes</button>
+        <button class="tab" id="tab-transcript" role="tab" aria-selected="false" aria-controls="panel-transcript" data-tab="transcript" type="button" tabindex="-1">Transcript</button>
+        <button class="tab" id="tab-review" role="tab" aria-selected="false" aria-controls="panel-review" data-tab="review" type="button" tabindex="-1">Review queue <span class="count-badge" id="review-count">0</span></button>
+      </nav>
+
+      <div class="panel" id="panel-notes" role="tabpanel" aria-labelledby="tab-notes" tabindex="0"></div>
+      <div class="panel" id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript" tabindex="0" hidden></div>
+      <div class="panel" id="panel-review" role="tabpanel" aria-labelledby="tab-review" tabindex="0" hidden></div>
+    </section>
+  </div>
+
+  <footer>
+    <span>PRIVATE BY DEFAULT</span>
+    <span>Evidence first. No inferred owners. No automatic sends.</span>
+  </footer>
+</main>
+
+<dialog id="add-dialog" aria-labelledby="add-dialog-title">
+  <form id="add-form" novalidate>
+    <h2 id="add-dialog-title">Add a meeting</h2>
+    <p class="dialog-intro">Creating a meeting stages a join request for review. The bot does not join the call until you approve and execute it, and only when live operations are enabled.</p>
+    <p class="form-error" id="add-error" role="alert" hidden></p>
+    <label class="field" for="field-title">Meeting title
+      <input id="field-title" name="title" type="text" maxlength="200" required autocomplete="off" placeholder="Weekly planning">
+    </label>
+    <label class="field" for="field-link">Google Meet link
+      <input id="field-link" name="link" type="url" required inputmode="url" autocomplete="off" placeholder="https://meet.google.com/abc-defg-hij" pattern="https://meet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}">
+    </label>
+    <label class="consent" for="field-consent">
+      <input id="field-consent" name="consent" type="checkbox" required>
+      <span>I have organizer authority for this meeting, and participants have received notice and given any required consent.</span>
+    </label>
+    <div class="dialog-actions">
+      <button class="button button-primary" id="add-submit" type="submit">Create and stage join</button>
+      <button class="button" id="add-cancel" type="button">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<noscript><p class="noscript">This workspace needs JavaScript to load your meeting record. Please enable JavaScript and reload.</p></noscript>
+</body>
+</html>

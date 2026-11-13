@@ -1,3 +1,5 @@
+> HISTORICAL LOCAL/LEGACY REFERENCE. Read [current status](STATUS.md) first. Engine not running; same-host-network-namespace second-daemon route is withdrawn. Earlier build/auth/hostname statements below are historical, not current readiness or permission to start anything.
+
 # Isolated deployment handoff - source/docs only
 
 This is a handoff checklist for an owner/operator to use *after* this

@@ -1,156 +1,69 @@
 # Lathar Labs Meet companion
 
-Private, single-owner Google Meet companion. **The hosted bot is not live yet.** The review UI and local demo work; joining a real meeting and live transcription, email and WhatsApp delivery still need the full service setup and acceptance tests.
+Review-first Google Meet companion and customer-workspace foundation. **The hosted meeting engine is not running and this is not ready for a real call or public customer launch.** Source saved here is separate from deployment and acceptance.
 
-**Local v0.1 status, 13 November 2026:** the local companion code is complete for local demo and review use — tests pass, no runtime pip dependencies, no credentials required for the demo. This is not a live-product release. The rollout gates in `deploy/ROLLOUT-GATES.md` (full ARM image, hosted service, real consenting call, owner delivery) are still open and each needs separate owner approval. See `docs/DEPLOYMENT-HANDOFF.md` for the isolated deployment checklist.
+## Saved checkpoint: 13 November 2026
 
-**Public source, private meetings:** this repository is public, but meeting transcripts, owner UI access, credentials and delivery destinations must remain private to the single owner. The demo uses invented dialogue and a fictional test number; it joins no call and sends nothing.
+- Local companion: Meet-link parsing, transcript review, source-linked notes, an exact-message approval queue, provider adapters and a synthetic demo.
+- SaaS foundation: animated landing page, private workspace UI, Google identity verification, four-digit WhatsApp OTP login, secure sessions, CSRF/origin checks and logout.
+- Isolation guards: workspace ownership checks, separate tenant stores, explicit upstream credential ownership, global one-meeting reservation and no shared-owner-token fallback.
+- OTP safeguards: default-deny recipient allowlist, private persistent attempt ledger, one approved test identity, pacing/budget/health checks and no automatic retry after an uncertain send. Customer OTP activation is not enabled.
+- Native ARM meeting-only image: built and passed the no-network synthetic checks. Its publication workflow failed the audience check after the image appeared public. Public access was removed and anonymous retrieval was denied. The existing image was then downloaded privately and independently hash-checked. The temporary read-only download credential was revoked and removed. This was not a clean publication success or an engine boot.
+- Actual sign-in checks completed in restricted test windows: Google login/session/workspace/logout, and one owner-only WhatsApp OTP request/verification/workspace/logout. Post-logout protected-route denial was observed for Google, not independently recorded for the OTP test. Login checks are not meeting acceptance.
+- A later isolated-runtime attempt affected the host's default Docker bridge even with `bridge: none`. Only the new services were stopped; the known bridge configuration was restored and existing app health checked. The same-host-network-namespace second-daemon route is **withdrawn and must not be retried**. No engine image import, engine boot or real Meet call was completed.
 
-Built around Vexa source commit `6b26f7b921756d6db128d42cd70b4b7046381407`. Vexa is a separate service, not bundled with this Python app. The native ARM worker image and synthetic browser/audio smoke passed. The full meeting-server image has not completed. A separate private GitHub ARM capability probe passed, but it did not build or deploy the bot.
+The target is `bot.143.lat`, currently a maintenance endpoint, not a working meeting service. All hosted auth, meeting operations and provider activation remain off outside separately approved tests. Do not wait on the website for a live meeting test.
 
-## Start here: local demo, no accounts or API cost
+The checked-in build workflow is manual-only and retained unchanged as historical build evidence. Its one approved build is complete; do not dispatch it again. Its first-publish-private assumption proved unsafe. Saving or pushing this code starts no build. Another build, credential, deployment or external test requires its own authority.
 
-Requirements: Git and Python 3.10 or newer. The companion has no runtime pip dependencies. These commands do not install or start Vexa and do not join a meeting.
+## Local demo: no account or provider calls
+
+Requirements: Git and Python 3.10 or newer. Core companion and synthetic tests use the standard library and SQLite. Google verification has a separate optional dependency extra.
 
 ```sh
 git clone https://github.com/latharrr/labs-meet-companion.git
 cd labs-meet-companion
-python3 --version
 python3 -m unittest discover -s tests -v
 python3 -m labs_meet.cli --db .local/demo.db demo
 python3 -m labs_meet.cli --db .local/demo.db serve
 ```
 
-This repository is public as of 13 November 2026: anyone can clone it without a login. Never put an access token in a clone URL or a README command. If your system uses `python` rather than `python3`, use that name after checking its version.
+Open `http://127.0.0.1:8765` on that computer. The demo is invented dialogue, joins no call and sends nothing. The local UI is read-only by default. Ctrl-C stops it. Use a separate private database for any real data; never commit databases, provider responses, keys or copied production configuration.
 
-Open `http://127.0.0.1:8765` on the same computer. You should see a synthetic meeting, its transcript and review items. The unauthenticated local UI is read-only by default. No real call is created and nothing is sent. Keep the terminal open; Ctrl-C stops the server. Use `serve --port 8766` if that local port is occupied.
+## SaaS code, not a production start command
 
-Use a separate database for real work. Do not copy a demo database into a hosted service or commit it. The demo includes invented dialogue and a delivery draft to the owner's test number, not permission to send it.
+`labs_meet/saas_runtime.py` is the separate loopback runtime; `--check` validates private configuration without starting the meeting engine. `deploy/saas-config.example.json` contains disabled features and placeholders only. Google requires the `google` optional extra, a dedicated approved client and official token verification. There is no Google client secret in the browser.
 
-## What you can do now
+Public landing-page assets use synthetic examples. The private workspace loads account-specific records from authenticated endpoints, not the marketing demo. Browsers cannot choose upstream credentials or another tenant. The app refuses meeting operations unless upstream isolation is explicitly verified and capacity is one. These source checks do not prove a working upstream multi-tenant service.
 
-- Run the demo and tests without credentials or external API calls.
-- Import an approved local transcript snapshot, inspect notes and stage exact delivery drafts.
-- Run the loopback review UI. Authenticated operations can stage, review and approve items after the operator provisions separate UI credentials.
-- Inspect `python3 -m labs_meet.cli config-status` for missing configuration. It does not test provider access or quota and does not print keys.
+The private OTP collector and host-specific operating configuration are deliberately not included. Do not point this code at an existing WhatsApp receptionist or copy its database/session credentials. The broker's one-test recipient and identity must come from separately approved private configuration. Changing an identity or replacing its ledger is not permission to resend.
 
-You cannot paste a Meet URL into the default demo and expect a bot to join. A separately configured, working Vexa service is required. There is no automatic background joining or unattended named-chat reply mode in this version.
+Customer email/WhatsApp delivery remains disabled in the SaaS path. Legacy CLI delivery adapters are gated owner-test tools, not arbitrary participant delivery. Staging and approving an item do not send it. Unknown provider outcomes require reconciliation, not blind retries.
 
-## Use with a configured private meeting service
+## Tests and evidence limits
 
-Read [Operations](docs/OPERATIONS.md) and [Acceptance checks](docs/ACCEPTANCE.md) before any real call. An operator must first finish the isolated ARM meeting-service build and service setup, configure private storage/Postgres and a one-bot quota, provision dedicated credentials, set up private TLS/authentication, and verify current provider quotas and costs. The planned address `meetbot.143.lat` is not a working deployment supplied by this repository.
+Run the suite above from a clean checkout. Unit and loopback contract tests cover identity/nonce/session checks, OTP safeguards, concurrent reservations, cross-workspace denial, review digests, stale approvals and uncertain outcomes. Tests use mocks and synthetic data; they make no real Meet, email, WhatsApp or model calls.
 
-`.env.example` lists configuration names, not secrets. The app **does not auto-load `.env`**. Use approved secret injection, not pasted keys in a terminal history, source file or chat. Keep all network-effect switches off until the owner has approved that test and its data routes. Do not connect the existing WhatsApp receptionist session.
+The ARM synthetic check verified image imports and the reduced eight-route gateway, including exact transcript-by-ID lookup. It did not verify database initialization, complete engine startup, worker cleanup, real audio/transcription, consent, customer quotas or delivery.
 
-There are separate gates:
+## Remaining gates
 
-| Gate | Meaning |
-|---|---|
-| `LABS_UI_USER` + `LABS_UI_PASSWORD` | Required together for authenticated owner operations |
-| `LABS_UI_OPERATIONS=explicitly-approved` | Enables authenticated staging/review controls, not provider calls |
-| `LABS_UI_HOST` | Exact private TLS hostname; listener still stays on loopback |
-| `LABS_LIVE_EFFECTS=explicitly-approved` | Technical switch for approved join/chat/email/WhatsApp execution |
-| `LABS_AI_EFFECTS=explicitly-approved` | Separate switch for approved model calls/data sharing |
+1. Prove a safe runtime away from existing live apps. Separate data directories and cgroups alone do not isolate a second Docker daemon's networking. No approved independent rehearsal environment is currently established.
+2. Verify engine, database, workers, storage, network egress, control plane, one-call concurrency, full process resource accounting and rollback. Preserve existing apps; no global-daemon restart or cap increase is a fallback.
+3. Verify real tenant-owned upstream records and exact transcript isolation. Per-account local databases alone are insufficient when upstream credentials or Meet-code lookups are shared.
+4. Run an explicitly approved consenting Meet call, with visible bot, organizer authority and required participant notice, then check audio, transcript quality, chat, leave and cleanup.
+5. Approve actual data processing, retention, support and deletion behavior. No fixed automatic deletion or backup erasure is promised. The private privacy draft is not a published policy and is not included here.
+6. Verify approved sender/destinations, provider policies/quotas and delivery outcomes before enabling customer effects. No spending or account permission is implied by source publication.
 
-A technical switch is not consent or spending authority. Do not expose the loopback HTTP server directly to the internet. Hosted use needs TLS, restricted access and proxy rate limits.
+## Source map
 
-### Normal owner workflow, after setup
+- `labs_meet/`: local companion, auth, SaaS boundary checks and runtime.
+- `labs_meet/public/`: landing page and private workspace assets.
+- `tests/`: synthetic and mocked tests.
+- `deploy/SAAS-RUNTIME.md`: source configuration contract, not deployment authority.
+- `docs/STATUS.md`: current acceptance boundary and withdrawn runtime route.
+- `docs/OPERATIONS.md`, `docs/ACCEPTANCE.md`, `docs/DEPLOYMENT-HANDOFF.md`: earlier local/legacy operating references. Current status and withdrawal warnings take precedence over their historical checkpoints.
 
-1. Start the companion with a private database and approved configuration. Open the authenticated owner UI through its private TLS address.
-2. Enter a Google Meet link and meeting title. Record organizer approval and required participant notice/consent before capture. Stage the join request.
-3. Review the exact queued item, approve its current digest, then execute it. Submission is not admission: the host may still need to admit the bot.
-4. Refresh the confirmed transcript. The first refresh is a historical baseline, so old chat questions do not trigger replies. CLI `watch` can monitor a configured Vexa transcript endpoint and create drafts; it does not automatically approve or send them.
-5. A new leading `@Lathar Labs` chat question creates a context-based reply draft. Review and approve the exact reply before execution. A queued chat item needs reconciliation before claiming it was posted.
-6. Generate notes locally or, with the separate approved model gate, AI notes. Corrected transcripts invalidate unsent approvals; regenerate and review again.
-7. Stage the summary/tasks as email or WhatsApp drafts. Only configured, owner-confirmed test destinations are supported. Review each exact email or WhatsApp chunk, approve, execute, then inspect its provider status.
-8. Stage and approve leave when finished. Local deletion is separate from deleting provider copies or backups.
+Built around separately deployed Vexa source `6b26f7b921756d6db128d42cd70b4b7046381407`. Speech and AI integrations are optional, network-gated and not quality-tested live. No paid fallback is selected. See `docs/SOURCES.md`, `docs/DEPENDENCIES.md` and adjacent upstream licence notices. No redistribution licence has been selected for the new companion code.
 
-### CLI example: staging is not sending
-
-These are operator examples for a configured service, not a shortcut around the setup above. Replace placeholders with the IDs printed by each command. Put `--db` before the command and keep using the same database.
-
-```sh
-python3 -m labs_meet.cli --db .local/private.db create https://meet.google.com/abc-defg-hij --title 'Consenting test call' --consent 'Record the actual organizer approval and participant notice here'
-python3 -m labs_meet.cli --db .local/private.db join MEETING_ID
-python3 -m labs_meet.cli --db .local/private.db review OUTBOX_ID
-python3 -m labs_meet.cli --db .local/private.db approve OUTBOX_ID --digest EXACT_REVIEWED_DIGEST
-```
-
-The placeholder link is an example, not a booked call. `approve` does not send. Only after the real test and exact effect are approved and all setup is complete:
-
-```sh
-python3 -m labs_meet.cli --db .local/private.db execute OUTBOX_ID
-python3 -m labs_meet.cli --db .local/private.db sync MEETING_ID
-python3 -m labs_meet.cli --db .local/private.db notes MEETING_ID
-```
-
-See [Operations](docs/OPERATIONS.md) for `watch`, local snapshot import, delivery, reconciliation, recovery and deletion. Never retry an unknown send blindly. Email acceptance and WhatsApp engine `sent` do not prove delivery or read status.
-
-## Current build and hosting status
-
-| Check | State |
-|---|---|
-| Python companion, owner UI and mocked provider adapters | Implemented; local unit/integration tests |
-| Native ARM worker image | Built; synthetic browser/audio smoke passed |
-| Full meeting-only server image | Not completed; isolated full build and boot still required |
-| Private GitHub ARM runner probe | Passed; capability check only, no full build |
-| Additional full GitHub build/private image publication | Offline proposal only, not authorized or installed |
-| `meetbot.143.lat` service | Not deployed |
-| Real Meet/audio/transcription/chat/model tests | Not done |
-| Real Resend email and separate WhatsApp delivery | Not done |
-
-Old deployment scripts are review/evidence material, not an instruction to retry builds or start services. No CI build is automatically enabled by publishing this README.
-
-## Implemented
-
-- Strict Google Meet link parser and explicit organizer-consent record.
-- Vexa HTTP adapters for join, confirmed transcript snapshots, leave, chat send and chat-send status.
-- Snapshot replacement, transcript revisions/retractions, pending-speech exclusion, meeting isolation.
-- Leading `@Lathar Labs` chat trigger. Historical backlog is suppressed by `watch`'s baseline sync.
-- Meeting-context replies as exact quoted evidence, with timestamps. Summary/decision/task queries have conservative extractive handlers.
-- Extractive highlights and decision/task candidates with source IDs. No invented task owners or deadlines.
-- Persistent SQLite review queue. Exact payload digest approval, once-only claim, stale approval invalidation, unknown-send recovery without automatic retry.
-- Concrete Resend email API with stable idempotency key, reviewed sender identity and one configured owner test destination. No CC/BCC. Not live tested.
-- OpenWA0.23.3 adapter against the verified send-text contract, with separately configured session/key and verified owner test chat ID. Long notes split into separately reviewed chunks. No existing receptionist credentials reused. Not live tested.
-- Authenticated owner UI: meeting link/consent entry, join/leave staging, transcript refresh, AI notes, delivery drafts and human-readable exact-item review/approval/execution controls. No third-party scripts/fonts.
-- Local deletion command for transcript/state. Provider copies, backups and disk remanence are separate.
-
-## Not implemented / not proven
-
-- No real Meet admission, audio, transcription, Hinglish accuracy or real chat send has been tested.
-- No live email/WhatsApp delivery has been tested. The concrete adapters remain gated, owner-test-only and unconnected.
-- Groq-compatible AI integration is implemented with exact segment/quote checks, no tool calls and default network-use guard. Selected text model: openai/gpt-oss-20b. Speech: whisper-large-v3-turbo via Vexa. No actual model key is connected or inference quality test completed. Extractive fallback works without external calls.
-- No automatic calendar joining, participant email verification, automatic assignments, reminders, cross-meeting memory, account sign-in, multiuser service or public deployment.
-- Joining still needs host admission. The app cannot bypass the lobby or meeting policies.
-- Single-owner HTTP Basic authentication and Origin/CSRF-gated browser operations are implemented. Hosting still requires TLS, proxy rate limiting, approved secret provisioning and security review. Listener remains loopback-only.
-- Public repository: labs-meet-companion, since 13 November 2026. No redistribution licence has been chosen yet for the new companion code, so the code is visible but no reuse rights are granted. Intended host: meetbot.143.lat. Repository publication does not deploy the bot.
-
-## Controlled integration path
-
-Read `docs/OPERATIONS.md` and `docs/ACCEPTANCE.md` first. Every network effect is off unless `LABS_LIVE_EFFECTS=explicitly-approved` is set by the operator. That switch is a technical guard, not permission: obtain the owner's approval for the deployment, exact messages/destinations and consenting-call test before using it.
-
-1. Configure a separate self-hosted Vexa instance pinned to the audited commit, with one existing speech pipeline. Do not attach the production WhatsApp receptionist.
-2. Record an organizer-approved test call and participant notice/consent.
-3. Create a meeting, stage a join, inspect `review`, approve that digest, then execute only within the approved test.
-4. Sync/watch confirmed notes. Each named-chat answer remains a draft until approved.
-5. Reconcile queued chat by provider request ID. queued does not mean posted.
-6. Export delivery drafts first. Configure only an owner-confirmed email/phone for tests. WhatsApp execution requires a verified owner test-chat ID in the reviewed payload and dedicated bridge/session/key configuration.
-
-## Licensing and sources
-
-See `docs/SOURCES.md` and `docs/DEPENDENCIES.md`. New companion code has no public redistribution licence chosen yet. The reviewed deployment seccomp files include Apache2.0 upstream material and adjacent licence/attribution. Vexa and the speech engine it supports are external dependencies, not a promise of free compute.
-
-## API/service choices
-
-| Function | Selected interface | Current state |
-|---|---|---|
-| Join, transcript, chat | Self-hosted Vexa HTTP API at pinned main commit | Adapter and loopback tests. Native ARM image built. Sandbox smoke passed with reviewed Docker29.9-matched container-only profile. Real Meet untested |
-| Speech-to-text | Groq `whisper-large-v3-turbo`, through Vexa's configurable transcription client | Source/docs-compatible. no live audio test or account quota check |
-| AI notes/answers | Groq `openai/gpt-oss-20b`, `/openai/v1/chat/completions` | Implemented, mock-tested, network calls off by default |
-| Email | Resend `POST /emails`,143.lat sender | Implemented. 143.lat domain verified. Exact sender, credential scope, plan/quota and delivery test still open |
-| WhatsApp | OpenWA0.23.3 `POST /api/sessions/{sessionId}/messages/send-text` | Verified contract + mocked adapter. no live bridge configured |
-| State | Python standard library + SQLite | Works locally. not encrypted/multiuser |
-
-No provider is silently upgraded to a paid plan. No Claude fallback is configured. Quota exhaustion must stop/queue work rather than create unapproved spend. A free endpoint is not guaranteed free capacity.
-
-`python -m labs_meet.cli config-status` reports missing configuration without echoing secrets. It does not contact accounts or establish quota.
+**Public source, private data:** the repository is intentionally public. Credentials, user identities, live phone numbers, transcripts, server access details, private operator tools and incident evidence are not source deliverables.

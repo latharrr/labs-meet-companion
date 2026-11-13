@@ -1,3 +1,5 @@
+> HISTORICAL LOCAL/LEGACY REFERENCE. Read [current status](../docs/STATUS.md) first. Engine not running; same-host-network-namespace second-daemon route is withdrawn. Earlier build/auth/hostname statements below are historical, not current readiness or permission to start anything.
+
 # Release gates: source demo to private Meet bot
 
 This is a release checklist, not approval to build, deploy, provision credentials, spend, join a call or send messages. The local companion works for development. The live meeting product is unfinished. Public source does not make private meeting data public.

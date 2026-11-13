@@ -19,8 +19,8 @@ def service(store):
     return Companion(store, vexa, ai)
 
 
-def operation(store, data):
-    app = service(store)
+def operation(store, data, app=None):
+    app = app if app is not None else service(store)
     action = data.get('action')
     if action == 'create':
         if data.get('consent_confirmed') is not True:
@@ -28,7 +28,7 @@ def operation(store, data):
         title = str(data.get('title', '')).strip()
         if not 1 <= len(title) <= 200:
             raise ValueError('Title must be 1..200 characters')
-        mid = app.create(title, data['link'], 'Owner confirmed organizer authority, notice and required consent in authenticated UI')
+        mid = app.create(title, data['link'], 'Authenticated organizer confirmed authority, participant notice and required consent')
         return {'meeting': mid, 'outbox': app.stage_join(mid)}
     mid = data.get('meeting')
     if action == 'join': return {'outbox': app.stage_join(mid)}
@@ -85,6 +85,23 @@ def handler(db, port):
             self.end_headers(); self.wfile.write(body)
 
         def do_GET(self):
+            # Optional public marketing preview is a fixed synthetic asset set.
+            # It never passes through the private meeting database or session APIs.
+            public_files = {
+                '/welcome': ('index.html', 'text/html'),
+                '/welcome/': ('index.html', 'text/html'),
+                '/welcome/landing.css': ('landing.css', 'text/css'),
+                '/welcome/landing.js': ('landing.js', 'text/javascript'),
+            }
+            if os.environ.get('LABS_PUBLIC_LANDING') == 'explicitly-approved' and self.path in public_files:
+                if self.headers.get('Host') not in allowed_hosts:
+                    self.send_error(403); return
+                # Canonical trailing slash makes relative assets resolve locally.
+                if self.path == '/welcome':
+                    self.send_response(302); self.send_header('Location', '/welcome/'); self.send_header('Cache-Control', 'no-store'); self.end_headers(); return
+                name, content_type = public_files[self.path]
+                self.response((Path(__file__).parent/'public'/name).read_bytes(), content_type)
+                return
             if not self.allowed(): return
             if self.path == '/api/review':
                 s=Store(db)

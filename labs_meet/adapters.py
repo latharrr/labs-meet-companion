@@ -23,7 +23,7 @@ def endpoint(base):
     return base.rstrip("/")
 
 
-def request(base, path, key, method="GET", body=None, header="X-API-Key", extra_headers=None):
+def request(base, path, key, method="GET", body=None, header="X-API-Key", extra_headers=None, with_status=False):
     url = endpoint(base) + path
     raw = None if body is None else json.dumps(body).encode()
     req = Request(url, data=raw, method=method, headers={header: key, "Content-Type": "application/json", **(extra_headers or {})})
@@ -32,7 +32,8 @@ def request(base, path, key, method="GET", body=None, header="X-API-Key", extra_
             data = res.read(4_000_001)
             if len(data) > 4_000_000:
                 raise ValueError("Response too large")
-            return json.loads(data) if data else {}
+            value=json.loads(data) if data else {}
+            return (res.status,value) if with_status else value
     except HTTPError as e:
         # Never echo upstream content or secret-bearing URLs.
         code = e.code
@@ -46,6 +47,11 @@ class Vexa:
 
     def transcript(self, code):
         return request(self.base, "/transcripts/google_meet/" + quote(code, safe=""), self.key)
+
+    def transcript_by_id(self, row_id):
+        if type(row_id) is not int or row_id < 1:
+            raise ValueError('Exact upstream meeting row required')
+        return request(self.base, '/transcripts/by-id/' + str(row_id), self.key)
 
     def perform(self, kind, payload):
         code = quote(payload["code"], safe="")

@@ -1,0 +1,25 @@
+# Offline template. Installing/starting is a production mutation, not authorized
+# by the existence of this file. Resolve actual UIDs, groups, paths and gates.
+[Unit]
+Description=Lathar Labs Meet isolated SaaS web
+After=network.target
+[Service]
+Type=simple
+User=labs-meet-web
+Group=labs-meet-web
+SupplementaryGroups=labs-meet-otp-ipc
+WorkingDirectory=/opt/labs-meet-saas
+ExecStart=/opt/labs-meet-saas/venv/bin/python -m labs_meet.saas_runtime --config /etc/labs-meet-saas/config.json
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/labs-meet-saas
+ReadOnlyPaths=/etc/labs-meet-saas /run/labs-meet-otp
+InaccessiblePaths=/opt/automations/openwa/data
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=no
+[Install]
+WantedBy=multi-user.target

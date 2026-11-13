@@ -7,7 +7,9 @@ version = "0.1.0"
 description = "Review-first Google Meet companion for Lathar Labs"
 requires-python = ">=3.10"
 dependencies = []
+[project.optional-dependencies]
+google = ["google-auth>=2.40,<3", "requests>=2.32,<3"]
 [project.scripts]
 labs-meet = "labs_meet.cli:main"
 [tool.setuptools.package-data]
-labs_meet = ["static/*", "fixtures/*"]
+labs_meet = ["static/*", "public/*", "fixtures/*"]

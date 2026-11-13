@@ -1,0 +1,14 @@
+{
+  "root": "/var/lib/labs-meet-saas",
+  "origin": "https://bot.143.lat",
+  "auth_key_file": "/etc/labs-meet-saas/auth.key",
+  "google_client_id": "",
+  "port": 8081,
+  "trusted_proxy_ips": ["127.0.0.1"],
+  "operations_enabled": false,
+  "upstream_isolation_verified": false,
+  "capacity": null,
+  "daily_joins": 20,
+  "tenant_daily": 3,
+  "otp": {"enabled": false}
+}

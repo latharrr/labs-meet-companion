@@ -1,3 +1,5 @@
+> HISTORICAL LOCAL/LEGACY REFERENCE. Read [current status](../docs/STATUS.md) first. Engine not running; same-host-network-namespace second-daemon route is withdrawn. Earlier build/auth/hostname statements below are historical, not current readiness or permission to start anything.
+
 # Deployment source and build evidence
 
 **Not a deployed service. Do not run these scripts as a setup shortcut.** The worker ARM build and synthetic browser/audio smoke passed, but the full meeting-only server build did not complete. Two VPS derivative attempts were stopped and cleaned up. No further VPS build attempt is authorized by these files. The GitHub ARM probe checked capabilities only; a full GitHub build remains a separately approved action.

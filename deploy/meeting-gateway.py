@@ -9,6 +9,7 @@ ALLOWED = {
     '/bots/{platform}/{native_meeting_id}/chat': {'POST'},
     '/bots/{platform}/{native_meeting_id}/chat/{request_id}': {'GET'},
     '/transcripts/{platform}/{native_meeting_id}': {'GET'},
+    '/transcripts/by-id/{meeting_id}': {'GET'},
 }
 
 
