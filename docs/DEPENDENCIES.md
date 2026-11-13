@@ -11,4 +11,4 @@
 
 Not combined: Attendee (Elastic2.0 hosted-service limits and duplicate capture), nojoin/OpenMinutes (AGPL choices need separate licence planning, duplicate pipeline), desktop-only Meetily, and unlicensed ScribeFlow. Prior research was the selection basis; the build reuses the smallest fitting stack rather than accumulating every repository.
 
-No public redistribution licence has been selected for new companion code. Keep the archive private until the owner chooses its repository/licence. Do not include chat databases, keys or transcripts in version control.
+No public redistribution licence has been selected for new companion code. The repository is public as of 13 November 2026, so the code is visible but no reuse rights are granted until the owner chooses a licence. Do not include chat databases, keys or transcripts in version control.

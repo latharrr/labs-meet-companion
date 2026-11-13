@@ -1,6 +1,7 @@
 """Explicitly configured network adapters. No secrets in stored payloads or logs."""
 import json
 import os
+from .core import BOT_DISPLAY_NAME
 from urllib.parse import urlsplit, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.error import HTTPError
@@ -51,7 +52,7 @@ class Vexa:
         if kind == "join":
             return request(self.base, "/bots", self.key, "POST", {
                 "platform": "google_meet", "native_meeting_id": payload["code"],
-                "bot_name": "Lathar Labs | Notes"})
+                "bot_name": BOT_DISPLAY_NAME})
         if kind == "leave":
             return request(self.base, "/bots/google_meet/" + code, self.key, "DELETE")
         if kind == "chat":
@@ -64,13 +65,17 @@ class Vexa:
 
 def whatsapp_send(payload):
     # Verified OpenWA 0.23.3 contract. Configure a dedicated test deployment/session/key.
-    sid = os.environ["LABS_OPENWA_SESSION"]
+    sid = os.environ.get("LABS_OPENWA_SESSION")
+    url = os.environ.get("LABS_OPENWA_URL")
+    key = os.environ.get("LABS_OPENWA_KEY")
+    if not sid or not url or not key:
+        raise ValueError("Configure LABS_OPENWA_URL, LABS_OPENWA_KEY and LABS_OPENWA_SESSION before sending")
     if not payload.get("chat_id") or payload["chat_id"] != os.environ.get("LABS_OPENWA_TEST_CHAT_ID"):
         raise ValueError("A live verified owner test chat ID is required; do not guess a WhatsApp lid")
     if len(payload["text"]) > 4096:
         raise ValueError("OpenWA text exceeds 4096 characters; review separate chunks first")
-    result = request(os.environ["LABS_OPENWA_URL"], "/api/sessions/" + quote(sid, safe="") + "/messages/send-text",
-                     os.environ["LABS_OPENWA_KEY"], "POST", {"chatId": payload["chat_id"], "text": payload["text"]})
+    result = request(url, "/api/sessions/" + quote(sid, safe="") + "/messages/send-text",
+                     key, "POST", {"chatId": payload["chat_id"], "text": payload["text"]})
     if not isinstance(result, dict) or not isinstance(result.get("messageId"), str):
         raise RuntimeError("Missing OpenWA message ID; uncertain outcome must be reconciled")
     return {"status": "sent", "provider": "openwa", "messageId": result["messageId"],
@@ -79,7 +84,10 @@ def whatsapp_send(payload):
 
 def resend_send(payload, idempotency_key):
     # Fixed official service base. No transcript-controlled URL, CC/BCC or attachments.
-    result = request("https://api.resend.com", "/emails", "Bearer " + os.environ["LABS_RESEND_KEY"], "POST", {
+    key = os.environ.get("LABS_RESEND_KEY")
+    if not key:
+        raise ValueError("Configure LABS_RESEND_KEY before sending")
+    result = request("https://api.resend.com", "/emails", "Bearer " + key, "POST", {
         "from": payload["from"], "to": [payload["to"]], "subject": payload["subject"], "text": payload["text"]
     }, "Authorization", {"Idempotency-Key": idempotency_key})
     if not isinstance(result, dict) or not isinstance(result.get("id"), str):

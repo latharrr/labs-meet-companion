@@ -25,6 +25,7 @@ def main(argv=None):
     c = sub.add_parser("approve"); c.add_argument("outbox"); c.add_argument("--digest", required=True)
     for name in ["execute", "reconcile"]:
         c = sub.add_parser(name); c.add_argument("outbox")
+    c = sub.add_parser("resolve"); c.add_argument("outbox"); c.add_argument("--status", choices=["sent", "accepted", "posted", "failed"], required=True); c.add_argument("--provider-id"); c.add_argument("--reason")
     sub.add_parser("config-status")
     sub.add_parser("recover")
     sub.add_parser("list")
@@ -39,7 +40,15 @@ def main(argv=None):
     if a.cmd == "create": result = {"meeting": app.create(a.title, a.link, a.consent)}
     elif a.cmd in ("join", "leave"):
         result = {"outbox": app.stage_join(a.meeting) if a.cmd == "join" else store.stage(a.meeting, "leave", {"code": store.meeting(a.meeting)["code"]})}
-    elif a.cmd == "sync": result = {"chat_drafts": app.sync(a.meeting, baseline=True)}
+    elif a.cmd == "sync":
+        # First sync for a meeting is the chat baseline (no backlog drafts),
+        # matching the UI. Later syncs draft new @Lathar Labs questions.
+        # Previously sync always used baseline=True, so it marked every
+        # question seen and a later watch could never draft it.
+        prior = store.db.execute("SELECT 1 FROM seen WHERE meeting=? LIMIT 1", (a.meeting,)).fetchone()
+        result = {"chat_drafts": app.sync(a.meeting, baseline=not prior)}
+        if not prior:
+            store.seen(a.meeting, "__cli_baseline__")
     elif a.cmd == "watch":
         if a.interval < 5 or not 1 <= a.cycles <= 360:
             raise ValueError("Use interval >=5 seconds and 1..360 cycles")
@@ -56,6 +65,7 @@ def main(argv=None):
     elif a.cmd == "approve": store.approve(a.outbox, a.digest); result = {"status": "approved, not sent"}
     elif a.cmd == "execute": result = app.execute(a.outbox)
     elif a.cmd == "reconcile": result = app.reconcile_chat(a.outbox)
+    elif a.cmd == "resolve": result = app.resolve_unknown(a.outbox, a.status, a.provider_id, a.reason)
     elif a.cmd == "delete": store.delete(a.meeting); result = {"status": "local meeting deleted; provider data/backups are separate"}
     elif a.cmd == "config-status":
         from .config import status
@@ -68,7 +78,9 @@ def main(argv=None):
         else:
             mid = app.create("Private-call rehearsal (synthetic)", "https://meet.google.com/abc-defg-hij", "Synthetic fixture. No participants, no real call.")
             drafts = app.ingest(mid, json.loads((Path(__file__).parent / "fixtures/demo.json").read_text()))
-            delivery = app.stage_delivery(mid, "whatsapp", "+918221016809")
+            # Fictional 555 test number (reserved for documentation use),
+            # not a real owner's number. The demo stages a draft only.
+            delivery = app.stage_delivery(mid, "whatsapp", "+15555550199")
             result = {"meeting": mid, "chat_drafts": drafts, "delivery_draft": delivery, "mode": "synthetic"}
     elif a.cmd == "serve":
         from .web import serve

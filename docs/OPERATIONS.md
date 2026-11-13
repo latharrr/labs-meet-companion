@@ -40,9 +40,12 @@ python -m labs_meet.cli watch MEETING_ID --interval 10 --cycles 12
 python -m labs_meet.cli notes MEETING_ID
 python -m labs_meet.cli deliver MEETING_ID --kind email --to OWNER_CONFIRMED_EMAIL
 python -m labs_meet.cli review OUTBOX_ID
+python -m labs_meet.cli resolve OUTBOX_ID --status accepted --provider-id PROVIDER_ID
 ```
 
-`watch` polls your separately configured Vexa transcript API, not a logged-in Google account. It drafts replies only. Its first snapshot is a baseline so old chat lines do not cause answers. `sync` alone also uses baseline mode. `import` processes a local Vexa-shaped JSON snapshot; add `--baseline` for historical data.
+Only a draft WhatsApp delivery can be split into chunks. The chunk count is checked before the parent is superseded, and chunks are staged before the parent is marked superseded, so a too-long delivery is not lost.
+
+`watch` polls your separately configured Vexa transcript API, not a logged-in Google account. It drafts replies only. Its first snapshot is a baseline so old chat lines do not cause answers. `sync` follows the same rule in the CLI and the UI: the first sync for a meeting is the baseline, later syncs draft new `@Lathar Labs` questions. `import` processes a local Vexa-shaped JSON snapshot; add `--baseline` for historical data.
 
 All effect destinations/words must be reviewed in the outbox. A revision to confirmed notes stales existing unsent chat/delivery approvals. Regenerate/review drafts after corrections. Outbox digests prevent approving a different stored payload under an old approval. Meeting text cannot change recipients, policy, model configuration or run tools.
 
@@ -52,7 +55,9 @@ All effect destinations/words must be reviewed in the outbox. A revision to conf
 - Chat `queued` is not sent. `reconcile` reads the request status; only `posted` is treated as provider-confirmed posting.
 - Resend `accepted` with email ID is API acceptance, not inbox delivery/read. Idempotency keys last24hours; this build still does not auto-retry uncertain sends.
 - OpenWA `sent` means engine return/persisted SENT with message ID, not recipient delivery/read. No request idempotency guarantee. A timeout stays unknown, never blindly retried.
-- Network exceptions become `unknown` and are not automatically retried. Stop all workers before `recover`; then inspect provider state. This build has no safe automatic retry for unknown effects.
+- Network exceptions become `unknown` and are not automatically retried. Stop all workers before `recover`; then inspect provider state. This build has no safe automatic retry for unknown effects. After a manual provider check, use `resolve OUTBOX_ID --status sent|accepted|posted|failed --provider-id PROVIDER_ID` to close an unknown send (CLI only; no new send is made). A submitted join can be closed the same way with `--status failed --reason "…"`, which releases the one-call guard.
+- One concurrent call is enforced in the companion: executing a second join while another join is submitted/active fails until that meeting is left or its join is resolved as failed. This is a companion-side guard only; the Vexa-side `max_concurrent_bots=1` cap (see `deploy/bootstrap-owner.py`) must also be set.
+- A final outbox status (`sent`, `accepted`, `posted`, `failed`, `superseded`) cannot be overwritten by a later settle. A queued chat without a provider request ID is settled as `unknown`, not `queued`, so it cannot be reconciled as if it had been posted.
 - Outbox rows are not an authentication system. Anyone with local OS access can edit the DB. Use one trusted operator and one effect worker per database.
 
 ## Data
@@ -63,7 +68,7 @@ The DB is created with mode 0600. Parent directories newly created by this app a
 
 ## RAM and deployment
 
-A single local companion review process measured 23,144 KiB RSS (about 22.6 MiB) with the tiny synthetic fixture. This is not a capacity benchmark, not Vexa's memory, and not an increment measured on the user's VPS.
+The local synthetic fixture is not a capacity benchmark. Measure the full isolated service and one real bot on the target host before deployment.
 
 The complete Vexa stack adds gateway, meeting service, runtime, admin/identity service, Postgres, Redis, storage and a browser per concurrent call. The pinned README separates GPU transcription from its default CPU control plane. This build does not provide a verified whole-stack RAM requirement. Do not infer it fits from the companion's small RSS.
 
@@ -86,3 +91,12 @@ For authenticated owner operations, provision separate LABS_UI_USER/LABS_UI_PASS
 The browser has meeting title/link entry, organizer/participant consent confirmation, staged join/leave, manual transcript refresh, AI notes, delivery drafting, full payload review, exact-digest approval, separate execution and queued-chat reconciliation. All writes require authentication, explicit operations enablement, exact Origin and a per-process CSRF token. Rendering uses textContent. Unknown sends have no retry button. Live operations remain off unless separately configured and approved. Email/WhatsApp execution remains bound to owner test destinations; this is not arbitrary-participant delivery. The first UI transcript sync establishes a baseline and excludes historical questions. AI notes have their own provider gate and confirmation. Staging/approval alone does not call providers.
 
 A staged read-only host is not the finished bot. Acceptance still requires actual ARM call/audio/chat/inference/owner-delivery tests and any separately approved workflow automation. No code/UI test substitutes for these.
+
+### Manual reconciliation limits
+
+Unknown email can be resolved only as accepted/failed, WhatsApp as sent/failed,
+and chat as posted/failed, with a checked provider ID. Unknown join/leave
+operations require a checked failure reason. A failed resolution must reflect
+an upstream check, not a local timeout. Pending or unknown joins hold the
+one-call guard; an in-flight leave does not release it. The upstream one-bot
+quota is still required and must be verified in live acceptance.

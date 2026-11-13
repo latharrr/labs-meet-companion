@@ -19,6 +19,8 @@ class Companion:
              "notice": "A visible Lathar Labs bot takes notes. Organizer must notify participants and obtain required consent."})
 
     def ingest(self, mid, snapshot, baseline=False):
+        if not isinstance(snapshot, dict):
+            raise ValueError("Expected Vexa transcript object with segments list")
         m = self.store.meeting(mid)
         if snapshot.get("native_meeting_id", m["code"]) != m["code"]:
             raise ValueError("Transcript belongs to another meeting")
@@ -58,8 +60,10 @@ class Companion:
     def generate_notes(self, mid):
         if not self.ai:
             raise ValueError("Configure the selected Groq-compatible AI provider first")
-        value = self.ai.minutes(self.store.segments(mid))
-        self.store.save_notes(mid, value)
+        rows = self.store.segments(mid)
+        evidence_digest = digest([s.__dict__ for s in rows])
+        value = self.ai.minutes(rows)
+        self.store.save_notes(mid, value, expected_digest=evidence_digest)
         return value
 
     def stage_delivery(self, mid, kind, to):
@@ -101,18 +105,60 @@ class Companion:
         text = item["payload"]["text"]
         if len(text) <= 4096:
             return [original]
-        # No send of the parent. Every numbered chunk gets its own exact-word approval.
-        self.store.settle(original, "superseded", {"reason": "Split into individually reviewed WhatsApp chunks"})
+        # Only a draft may be split. An approved (or sent) delivery must not
+        # be silently superseded, and the chunk-count check must run before
+        # the parent is touched, so a too-long delivery is not lost.
+        if item["status"] != "draft":
+            raise ValueError("Only a draft delivery can be split into WhatsApp chunks")
         parts = [text[i:i+3700] for i in range(0, len(text), 3700)]
         if len(parts) > 20:
             raise ValueError("Too many WhatsApp chunks; use reviewed email or a private file instead")
-        return [self.store.stage(mid, "whatsapp", {**item["payload"], "text": f"({i+1}/{len(parts)}) " + part}) for i, part in enumerate(parts)]
+        # Stage every chunk first; only then supersede the parent. A failure
+        # while staging chunks leaves the original draft intact.
+        chunks = [self.store.stage(mid, "whatsapp", {**item["payload"], "text": f"({i+1}/{len(parts)}) " + part}) for i, part in enumerate(parts)]
+        self.store.settle(original, "superseded", {"reason": "Split into individually reviewed WhatsApp chunks"})
+        return chunks
+
+    def resolve_unknown(self, oid, status, provider_id=None, reason=None):
+        """Manually close an unknown send, or a submitted join, after a
+        provider/manual check. No blind retry, and no new send is made.
+
+        Unknown email/WhatsApp/chat items need the provider ID the owner
+        verified (Resend id, OpenWA messageId, or chat request_id).
+        A submitted join can only be closed as 'failed' (denied/timed out),
+        with a reason; that releases the one-call guard.
+        """
+        out = self.store.out(oid)
+        current = out["status"]
+        if current == "unknown" and out["kind"] in ("join", "leave"):
+            if status != "failed" or not isinstance(reason, str) or not reason.strip():
+                raise ValueError("An unknown meeting operation needs a checked failure reason; no blind retry")
+        elif current == "unknown":
+            allowed = {"email": ("accepted", "failed"), "whatsapp": ("sent", "failed"), "chat": ("posted", "failed")}
+            if status not in allowed.get(out["kind"], ()):
+                raise ValueError("Resolve an unknown send to sent, accepted, posted or failed")
+            if not isinstance(provider_id, str) or not provider_id.strip():
+                raise ValueError("Provider ID from the manual check is required")
+        elif current == "submitted" and out["kind"] == "join":
+            if status != "failed":
+                raise ValueError("A submitted join can only be closed as failed")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError("A reason is required to close a submitted join")
+        else:
+            raise ValueError("Only an unknown send or a submitted join can be resolved manually")
+        self.store.settle(oid, status, {"manual_reconciliation": True, "provider_id": provider_id,
+                                         "reason": reason, "previous_status": current})
+        return self.store.out(oid)
 
     def execute(self, oid):
         if os.environ.get("LABS_LIVE_EFFECTS") != "explicitly-approved":
             raise ValueError("Live effects disabled. Export/review first; obtain deployment and per-effect approval.")
         out = self.store.out(oid)
         kind, payload = out["kind"], out["payload"]
+        # Validate the kind before claiming, so an unsupported item stays
+        # approved instead of being claimed and then marked unknown.
+        if kind not in ("join", "leave", "chat", "email", "whatsapp"):
+            raise ValueError("Unsupported effect")
         if kind in ("email", "whatsapp"):
             # A separately configured owner-confirmed test destination is required.
             allowed = os.environ.get("LABS_TEST_EMAIL" if kind == "email" else "LABS_TEST_PHONE")
@@ -135,6 +181,11 @@ class Companion:
                 result = self.vexa.perform(kind, payload)
                 # Queued chat is not posted; join request is not admission.
                 status = "queued" if kind == "chat" else "submitted"
+                if kind == "chat":
+                    # A queued chat without a provider request ID cannot be
+                    # reconciled later, so treat it as unknown now, not queued.
+                    if not isinstance(result, dict) or not isinstance(result.get("request_id"), str) or not result["request_id"]:
+                        raise RuntimeError("Chat provider did not return a request ID; outcome is unknown")
             elif kind == "email":
                 result, status = resend_send(payload, "labs-meet/" + oid), "accepted"
             elif kind == "whatsapp":
@@ -151,7 +202,16 @@ class Companion:
         out = self.store.out(oid)
         if out["kind"] != "chat" or out["status"] != "queued":
             raise ValueError("Only a queued chat with a provider request ID can be reconciled")
-        result = json.loads(out["result"])
+        if not self.vexa:
+            raise ValueError("Vexa not configured")
+        if not isinstance(out["result"], str):
+            raise ValueError("No provider result to reconcile; manual reconciliation required")
+        try:
+            result = json.loads(out["result"])
+        except ValueError:
+            raise ValueError("Provider result is not valid JSON; manual reconciliation required") from None
+        if not isinstance(result, dict):
+            raise ValueError("Provider result is not an object; manual reconciliation required")
         request_id = result.get("request_id")
         if not isinstance(request_id, str) or not request_id:
             raise ValueError("No provider request ID; manual reconciliation required")

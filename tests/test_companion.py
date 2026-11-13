@@ -91,15 +91,15 @@ class ServiceTests(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True), self.assertRaises(ValueError): self.a.execute(oid)
         self.assertEqual(self.s.out(oid)['status'],'draft')
     def test_delete_cascades(self):
-        self.ingest();self.a.stage_delivery(self.mid,'whatsapp','+918221016809');self.s.delete(self.mid)
+        self.ingest();self.a.stage_delivery(self.mid,'whatsapp','+15555550199');self.s.delete(self.mid)
         for table in ['meetings','segments','outbox','seen']: self.assertEqual(self.s.db.execute('SELECT count(*) FROM '+table).fetchone()[0],0)
     def test_file_permissions(self): self.assertEqual(self.path.stat().st_mode & 0o777,0o600)
     def test_test_destination_only(self):
         self.ingest();oid=self.a.stage_delivery(self.mid,'email','stranger@example.test');self.s.approve(oid,self.s.out(oid)['digest'])
         with patch.dict(os.environ,{'LABS_LIVE_EFFECTS':'explicitly-approved','LABS_TEST_EMAIL':'owner@example.test'}), self.assertRaises(ValueError): self.a.execute(oid)
     def test_whatsapp_disabled(self):
-        self.ingest();oid=self.a.stage_delivery(self.mid,'whatsapp','+918221016809');self.s.approve(oid,self.s.out(oid)['digest'])
-        with patch.dict(os.environ,{'LABS_LIVE_EFFECTS':'explicitly-approved','LABS_TEST_PHONE':'+918221016809'}), self.assertRaises(ValueError): self.a.execute(oid)
+        self.ingest();oid=self.a.stage_delivery(self.mid,'whatsapp','+15555550199');self.s.approve(oid,self.s.out(oid)['digest'])
+        with patch.dict(os.environ,{'LABS_LIVE_EFFECTS':'explicitly-approved','LABS_TEST_PHONE':'+15555550199'}), self.assertRaises(ValueError): self.a.execute(oid)
     def test_future_evidence_excluded(self):
         f=json.loads(json.dumps(FIXTURE));f['segments'].append({'segment_id':'future','start':100,'end':110,'completed':True,'text':'We agreed to test on Mars','speaker':'Future'})
         oid=self.a.ingest(self.mid,f)[0];self.assertNotIn('future',self.s.out(oid)['payload']['evidence'])

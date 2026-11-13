@@ -67,16 +67,42 @@ class Store:
     def stage(self, mid, kind, payload):
         self.meeting(mid)
         d = digest(payload)
-        old = self.db.execute("SELECT id,status FROM outbox WHERE meeting=? AND kind=? AND digest=?", (mid, kind, d)).fetchone()
-        if old:
-            if old[1] == "stale":
-                with self.db:
-                    self.db.execute("UPDATE outbox SET status='draft' WHERE id=?", (old[0],))
-            return old[0]
         oid = uuid.uuid4().hex
+        # INSERT OR IGNORE makes staging idempotent under concurrent writers:
+        # two writers staging the same exact payload get the same row, never
+        # an IntegrityError from the UNIQUE(meeting,kind,digest) constraint.
         with self.db:
-            self.db.execute("INSERT INTO outbox VALUES(?,?,?,?,?,?,?,?)", (oid, mid, kind, json.dumps(payload), d, "draft", None, time.time()))
+            cur = self.db.execute("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?,?,?)",
+                                  (oid, mid, kind, json.dumps(payload), d, "draft", None, time.time()))
+            if cur.rowcount == 0:
+                old = self.db.execute("SELECT id,status FROM outbox WHERE meeting=? AND kind=? AND digest=?", (mid, kind, d)).fetchone()
+                if old is None:
+                    raise ValueError("Outbox staging conflict; review again")
+                if old[1] == "stale":
+                    self.db.execute("UPDATE outbox SET status='draft' WHERE id=?", (old[0],))
+                return old[0]
         return oid
+
+    def active_join(self, exclude_oid=None):
+        """Return a submitted/in-flight join that is not yet closed by a leave.
+
+        A join counts as active until a leave for the same meeting has been
+        submitted after it. This is the companion-side one-call guard; the
+        Vexa-side max_concurrent_bots=1 cap (see deploy/bootstrap-owner.py)
+        is separate and must also be set.
+        """
+        rows = self.db.execute(
+            "SELECT id, meeting, created FROM outbox WHERE kind='join' AND status IN ('submitted','sending','unknown') ORDER BY created"
+        ).fetchall()
+        for row in rows:
+            if exclude_oid and row[0] == exclude_oid:
+                continue
+            leave = self.db.execute(
+                "SELECT 1 FROM outbox WHERE meeting=? AND kind='leave' AND status='submitted' AND created>=? LIMIT 1",
+                (row[1], row[2])).fetchone()
+            if not leave:
+                return dict(row)
+        return None
 
     def out(self, oid):
         row = self.db.execute("SELECT * FROM outbox WHERE id=?", (oid,)).fetchone()
@@ -96,23 +122,42 @@ class Store:
             raise ValueError("Only a fresh draft can be approved")
 
     def claim(self, oid):
+        # Serialize quota inspection and the claim across independent workers.
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            out = self.out(oid)
+            if out["kind"] == "join" and self.active_join(oid):
+                raise ValueError("One concurrent call limit: leave or resolve the active/unknown join first")
             n = self.db.execute("UPDATE outbox SET status='sending',created=? WHERE id=? AND status='approved'", (time.time(),oid)).rowcount
-        if n != 1:
-            raise ValueError("Not approved or already attempted")
+            if n != 1:
+                raise ValueError("Not approved or already attempted")
         return self.out(oid)
 
     def settle(self, oid, status, result):
+        # Compare and write under one lock; terminal results cannot race a late
+        # reconciler into changing the state or overwriting provider evidence.
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            current = self.out(oid)["status"]
+            if current in ("sent", "accepted", "posted", "failed", "superseded"):
+                if status != current:
+                    raise ValueError("Final outbox status cannot be changed")
+                return
             self.db.execute("UPDATE outbox SET status=?, result=? WHERE id=?", (status, json.dumps(result), oid))
 
     def seen(self, mid, event):
         with self.db:
             return self.db.execute("INSERT OR IGNORE INTO seen VALUES(?,?)", (mid, event)).rowcount == 0
 
-    def save_notes(self, mid, value):
-        d = digest([s.__dict__ for s in self.segments(mid)])
+    def save_notes(self, mid, value, expected_digest=None):
+        # A model request can overlap a transcript correction in another process.
+        # Serialize validation+write so old notes cannot be labelled as new evidence.
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            self.meeting(mid)
+            d = digest([s.__dict__ for s in self.segments(mid)])
+            if expected_digest is not None and d != expected_digest:
+                raise ValueError("Transcript changed while notes were generated; regenerate and review")
             self.db.execute("INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)", (mid,"ai-notes",d,json.dumps(value)))
 
     def ai_notes(self, mid):

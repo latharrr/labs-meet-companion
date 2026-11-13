@@ -1,6 +1,22 @@
 """Non-secret configuration checks. This never validates account access or quota."""
 import os
+import re
 from .adapters import endpoint
+
+EMAIL_RE = re.compile(r"[^\s@<>;,\r\n]+@[^\s@<>;,\r\n]+\.[^\s@<>;,\r\n]+")
+PHONE_RE = re.compile(r"\+[1-9][0-9]{7,14}")
+
+
+def _email_ok(value):
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if "<" in value and ">" in value:
+        try:
+            inner = value[value.index("<") + 1:value.index(">")]
+        except ValueError:
+            return False
+        return bool(EMAIL_RE.fullmatch(inner.strip()))
+    return bool(EMAIL_RE.fullmatch(value.strip()))
 
 
 def status():
@@ -20,4 +36,11 @@ def status():
         if os.environ.get(key):
             try:endpoint(os.environ[key])
             except ValueError:result.setdefault("invalid_fields",[]).append(key)
+    # A present-but-malformed destination is not "configured": report it
+    # instead of letting stage/execute fail later with a confusing error.
+    for key in ("LABS_TEST_EMAIL", "LABS_EMAIL_FROM"):
+        if os.environ.get(key) and not _email_ok(os.environ[key]):
+            result.setdefault("invalid_fields", []).append(key)
+    if os.environ.get("LABS_TEST_PHONE") and not PHONE_RE.fullmatch(os.environ["LABS_TEST_PHONE"]):
+        result.setdefault("invalid_fields", []).append("LABS_TEST_PHONE")
     return result

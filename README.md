@@ -2,6 +2,10 @@
 
 Private, single-owner Google Meet companion. **The hosted bot is not live yet.** The review UI and local demo work; joining a real meeting and live transcription, email and WhatsApp delivery still need the full service setup and acceptance tests.
 
+**Local v0.1 status, 13 November 2026:** the local companion code is complete for local demo and review use — tests pass, no runtime pip dependencies, no credentials required for the demo. This is not a live-product release. The rollout gates in `deploy/ROLLOUT-GATES.md` (full ARM image, hosted service, real consenting call, owner delivery) are still open and each needs separate owner approval. See `docs/DEPLOYMENT-HANDOFF.md` for the isolated deployment checklist.
+
+**Public source, private meetings:** this repository is public, but meeting transcripts, owner UI access, credentials and delivery destinations must remain private to the single owner. The demo uses invented dialogue and a fictional test number; it joins no call and sends nothing.
+
 Built around Vexa source commit `6b26f7b921756d6db128d42cd70b4b7046381407`. Vexa is a separate service, not bundled with this Python app. The native ARM worker image and synthetic browser/audio smoke passed. The full meeting-server image has not completed. A separate private GitHub ARM capability probe passed, but it did not build or deploy the bot.
 
 ## Start here: local demo, no accounts or API cost
@@ -17,7 +21,7 @@ python3 -m labs_meet.cli --db .local/demo.db demo
 python3 -m labs_meet.cli --db .local/demo.db serve
 ```
 
-This repository is private: cloning requires an authorized GitHub login. Never put an access token in a clone URL or a README command. If your system uses `python` rather than `python3`, use that name after checking its version.
+This repository is public as of 13 November 2026: anyone can clone it without a login. Never put an access token in a clone URL or a README command. If your system uses `python` rather than `python3`, use that name after checking its version.
 
 Open `http://127.0.0.1:8765` on the same computer. You should see a synthetic meeting, its transcript and review items. The unauthenticated local UI is read-only by default. No real call is created and nothing is sent. Keep the terminal open; Ctrl-C stops the server. Use `serve --port 8766` if that local port is occupied.
 
@@ -88,7 +92,7 @@ See [Operations](docs/OPERATIONS.md) for `watch`, local snapshot import, deliver
 |---|---|
 | Python companion, owner UI and mocked provider adapters | Implemented; local unit/integration tests |
 | Native ARM worker image | Built; synthetic browser/audio smoke passed |
-| Full meeting-only server image | Not completed; two VPS attempts stopped on late safety-check updates |
+| Full meeting-only server image | Not completed; isolated full build and boot still required |
 | Private GitHub ARM runner probe | Passed; capability check only, no full build |
 | Additional full GitHub build/private image publication | Offline proposal only, not authorized or installed |
 | `meetbot.143.lat` service | Not deployed |
@@ -119,7 +123,7 @@ Old deployment scripts are review/evidence material, not an instruction to retry
 - No automatic calendar joining, participant email verification, automatic assignments, reminders, cross-meeting memory, account sign-in, multiuser service or public deployment.
 - Joining still needs host admission. The app cannot bypass the lobby or meeting policies.
 - Single-owner HTTP Basic authentication and Origin/CSRF-gated browser operations are implemented. Hosting still requires TLS, proxy rate limiting, approved secret provisioning and security review. Listener remains loopback-only.
-- Private repository: labs-meet-companion. Intended host: meetbot.143.lat. Repository publication does not deploy the bot.
+- Public repository: labs-meet-companion, since 13 November 2026. No redistribution licence has been chosen yet for the new companion code, so the code is visible but no reuse rights are granted. Intended host: meetbot.143.lat. Repository publication does not deploy the bot.
 
 ## Controlled integration path
 

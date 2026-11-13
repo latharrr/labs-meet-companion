@@ -7,14 +7,18 @@ import re
 from urllib.parse import urlsplit
 
 BOT_NAME = "Lathar Labs"
+BOT_DISPLAY_NAME = "Lathar Labs | Notes"
 MEET_CODE = re.compile(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$")
 
 
 def meeting_code(link: str) -> str:
+    if not isinstance(link, str):
+        raise ValueError("Use an https://meet.google.com/abc-defg-hij link")
     p = urlsplit(link)
     code = p.path.strip("/")
     if (p.scheme != "https" or p.hostname != "meet.google.com" or p.username
-            or p.password or p.port not in (None, 443) or not MEET_CODE.fullmatch(code)):
+            or p.password or p.port not in (None, 443) or p.fragment
+            or not MEET_CODE.fullmatch(code)):
         raise ValueError("Use an https://meet.google.com/abc-defg-hij link")
     return code
 
@@ -43,7 +47,12 @@ def normalize(payload: dict) -> list[Segment]:
         text = raw.get("text")
         if not isinstance(text, str) or not text.strip():
             continue
-        start, end = float(raw.get("start", 0)), float(raw.get("end", raw.get("start", 0)))
+        if isinstance(raw.get("start"), bool) or isinstance(raw.get("end"), bool):
+            raise ValueError("Invalid segment timing")
+        try:
+            start, end = float(raw.get("start", 0)), float(raw.get("end", raw.get("start", 0)))
+        except (TypeError, ValueError):
+            raise ValueError("Invalid segment timing") from None
         if not (0 <= start <= end < 1e9):
             raise ValueError("Invalid segment timing")
         source = str(raw.get("source", "audio"))
@@ -54,7 +63,7 @@ def normalize(payload: dict) -> list[Segment]:
 
 
 def named_question(text: str, speaker: str) -> str | None:
-    if speaker.casefold() == BOT_NAME.casefold():
+    if speaker.strip().casefold() in {BOT_NAME.casefold(), BOT_DISPLAY_NAME.casefold()}:
         return None
     # Only direct leading addresses, not every casual mention of the company.
     m = re.match(r"^\s*@?Lathar\s+Labs\b\s*[:,?!-]?\s*(.+)$", text, re.I | re.S)
