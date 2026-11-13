@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "labs-meet-companion"
+version = "0.1.0"
+description = "Review-first Google Meet companion for Lathar Labs"
+requires-python = ">=3.10"
+dependencies = []
+[project.scripts]
+labs-meet = "labs_meet.cli:main"
+[tool.setuptools.package-data]
+labs_meet = ["static/*", "fixtures/*"]

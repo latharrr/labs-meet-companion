@@ -1,0 +1,15 @@
+.local/
+.env
+*.db
+*.db-*
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+.agents/
+skills-lock.json
+*.log
+*.tgz
+*.zip

@@ -1,0 +1,12 @@
+{
+  "native_meeting_id": "abc-defg-hij",
+  "status": "completed",
+  "segments": [
+    {"segment_id":"a1","start":2,"end":8,"completed":true,"speaker":"Demo organizer","text":"Today's goal is to choose the first Labs Meet companion test."},
+    {"segment_id":"a2","start":10,"end":17,"completed":true,"speaker":"Demo teammate","text":"We agreed to test with a private call before a deployment."},
+    {"segment_id":"a3","start":20,"end":28,"completed":true,"speaker":"Demo organizer","text":"I will prepare a short English and Hinglish script for the private call."},
+    {"segment_id":"a4","start":30,"end":38,"completed":true,"speaker":"Demo teammate","text":"The remaining questions are transcription accuracy, admission and memory use."},
+    {"segment_id":"c1","start":40,"end":40,"completed":true,"speaker":"Demo teammate","source":"chat","text":"@Lathar Labs, what did we agree to test?"},
+    {"segment_id":"pending","start":41,"end":42,"completed":false,"speaker":"Demo organizer","text":"Unconfirmed speech must not be used."}
+  ]
+}

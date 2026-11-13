@@ -1,0 +1,3 @@
+# Meeting review surface
+
+Mode: Operate. Preserve the warm paper/deep green identity while removing marketing scaffolding. Let the meeting, evidence and review status lead. A restrained two-column workspace on desktop collapses to a single reading flow on mobile. Clear text states replace ornamental numbers, eyebrow labels and decorative cards. Fixed type scale. Familiar controls, visible focus, touch-sized tab targets and high-contrast secondary text. No remote fonts/scripts, no decorative motion. Never render transcript as HTML. Review UI stays read-only until a separately designed and authenticated control surface exists.
