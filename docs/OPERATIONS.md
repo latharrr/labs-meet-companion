@@ -2,7 +2,7 @@
 
 ## Scope
 
-This is an isolated local implementation. Existing services, WhatsApp number, credentials and VPS were not changed. Do not deploy without a current target-host resource check and owner approval.
+This companion is not deployed. Its build work must stay separate from existing services and WhatsApp sessions. Do not deploy without a current target-host resource check and owner approval. Other maintenance on the same VPS is outside this guide.
 
 ## Configuration
 
@@ -75,7 +75,7 @@ Vexa appends `/v1/audio/transcriptions` to its transcription base. For Groq conf
 
 ## Current ARM constraint
 
-The user's VPS is ARM64. Stock Vexa bot release image is amd64-only even though control-plane images support ARM. The upstream Playwright base has an ARM manifest, so a pinned native source build is being tested in isolation. See `deploy/arm64-probe.md`. No claim of working ARM capture until actual build plus browser/audio/call checks pass.
+The user's VPS is ARM64. Stock Vexa bot release image is amd64-only even though control-plane images support ARM. The pinned native worker source build and synthetic sandboxed browser/audio checks passed. The full meeting-only server image has not completed, and no real Meet/audio/transcription test has passed. The private GitHub ARM capability probe succeeded but did not build an image. See `deploy/arm64-probe.md` for earlier worker evidence and `deploy/ROLLOUT-GATES.md` for remaining gates. Do not rerun old build scripts without new approval.
 
 ## Private browser workflow
 

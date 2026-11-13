@@ -4,7 +4,7 @@
 
 - Unit tests for parsers, confirmed-only evidence, named-chat routing, no future evidence, redacted errors, anti-backlog, stale approvals, dedupe, permissions and deletion.
 - Actual HTTP requests against a loopback Vexa-shaped contract double: join -> transcript -> reply draft -> approved queued send -> posted reconciliation -> leave. This proves our wiring against a fake, not Vexa/Google.
--65tests pass. Authenticated real loopback HTTP checks cover auth, Host/Origin/CSRF, consent, digest, stale/disabled effects. Installed wheel exercised in fresh virtualenv with UI/fixture resources.
+-81tests pass. Authenticated real loopback HTTP checks cover auth, Host/Origin/CSRF, consent, digest, stale/disabled effects. Installed wheel exercised in fresh virtualenv with UI/fixture resources.
 - Browser UI: notes, transcript and review-queue tabs plus authenticated meeting entry/consent/staging/review/approval exercised. Desktop 1440px and mobile 390px; no JS errors or horizontal overflow. Screenshots visually inspected.
 - No new account, paid API, real call or external delivery used. Existing provider metadata verified143.lat without key transfer.
 

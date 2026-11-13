@@ -1,0 +1,42 @@
+# Review-only derivative. Requires generated context and independently approved host build.
+# Upstream source and locks remain pinned. No stock Lite entrypoint/terminal/agent image.
+FROM bot AS meetings
+USER root
+ENV DEBIAN_FRONTEND=noninteractive UV_LINK_MODE=copy PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv supervisor tini postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+# Checksum-pinned upstream uv release, injected by exact-source generator.
+@UV_INSTALL@
+COPY admin/pyproject.toml admin/uv.lock /tmp/admin/
+RUN cd /tmp/admin && /usr/local/bin/uv venv --python 3.12 /opt/venvs/admin && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+COPY runtime/pyproject.toml runtime/uv.lock /tmp/runtime/
+RUN cd /tmp/runtime && /usr/local/bin/uv venv --python 3.12 /opt/venvs/runtime && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+COPY meeting/pyproject.toml meeting/uv.lock /tmp/meeting/
+RUN cd /tmp/meeting && /usr/local/bin/uv venv --python 3.12 /opt/venvs/meeting && UV_PROJECT_ENVIRONMENT=/opt/venvs/meeting /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+COPY gateway/pyproject.toml gateway/uv.lock /tmp/gateway/
+RUN cd /tmp/gateway && /usr/local/bin/uv venv --python 3.12 /opt/venvs/gateway && UV_PROJECT_ENVIRONMENT=/opt/venvs/gateway /usr/local/bin/uv sync --frozen --no-install-project --no-dev --group production
+COPY admin/src /app/admin-api/src
+COPY runtime/src /app/runtime/src
+COPY meeting/src /app/meeting-api/src
+COPY meeting/contracts /app/meeting-api/meetings/contracts
+COPY runtime/contracts /app/meeting-api/runtime/contracts
+COPY meeting/routes.v1.json meeting/mcp.tools.v1.json /app/meeting-api/meetings/
+COPY gateway/src /app/gateway/src
+COPY gateway/manifests /app/gateway/core
+COPY bin /usr/local/bin
+COPY supervisord.meetings.conf /etc/supervisor/conf.d/vexa.conf
+COPY meeting-entrypoint.py meeting-gateway.py /usr/local/bin/
+COPY --from=valkey /opt/valkey/bin/valkey-server /opt/valkey/bin/valkey-cli /usr/local/bin/
+COPY --from=valkey /valkey-COPYING /usr/local/share/valkey/LICENSE
+# Remove worker image entrypoint and unsafe shared checkpoint directory; per-bot launcher owns fd9.
+RUN rm -rf /app/storage/screenshots && ln -s /proc/self/fd/9 /app/storage/screenshots \
+    && chmod -R a+rX,go-w /ms-playwright \
+    && chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-runtime /usr/local/bin/bot-display /usr/local/bin/no-user-namespaces \
+    && mkdir -p /var/log/supervisor /var/lib/redis /var/lib/vexa/state /var/lib/vexa-runtime/logs /workspaces \
+    && chmod 0700 /var/lib/redis /var/lib/vexa/state /var/lib/vexa-runtime/logs \
+    && rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway
+# No Docker socket, host credential mount, model CLI, UI terminal or agent service.
+# Process runtime needs root inside this container to allocate separate bot UIDs; bots drop to nonroot.
+ENV HOME=/root
+EXPOSE 8056
+ENTRYPOINT ["tini", "--", "python3", "/usr/local/bin/meeting-entrypoint.py"]

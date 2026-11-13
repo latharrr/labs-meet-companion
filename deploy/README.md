@@ -1,4 +1,12 @@
-# ARM feasibility scripts
+# Deployment source and build evidence
+
+**Not a deployed service. Do not run these scripts as a setup shortcut.** The worker ARM build and synthetic browser/audio smoke passed, but the full meeting-only server build did not complete. Two VPS derivative attempts were stopped and cleaned up. No further VPS build attempt is authorized by these files. The GitHub ARM probe checked capabilities only; a full GitHub build remains a separately approved action.
+
+The following sections describe the original isolated worker feasibility procedure for review and reproducibility, not a new instruction to execute it. Read the main README and docs/OPERATIONS.md first. A future deployment still requires a verified full image, service/storage setup, fresh resource measurements, private TLS/auth, separate credentials and consenting real-call tests.
+
+New source files include the reduced five-program meeting supervisor generator, entrypoint environment filtering, seven-route gateway wrapper and their offline tests. Their presence does not prove an image boots. build-resource-monitor.py and validate-oci-stream.py are historical build-support utilities, not an approved retry plan. The monitor's older external heartbeat arrangement stopped two runs on late updates; do not reuse it as if that issue were proven fixed.
+
+## Original ARM worker feasibility scripts
 
 The build script is an approval-gated feasibility probe, not production deployment.
 
