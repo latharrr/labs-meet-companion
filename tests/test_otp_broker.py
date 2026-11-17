@@ -1,6 +1,8 @@
-import tempfile,unittest,threading,concurrent.futures
+import os,tempfile,unittest,threading,concurrent.futures
 from pathlib import Path
 from labs_meet.otp_broker import BoundedOtpBroker,OtpUnavailable
+# macOS keeps temp files under /var, a symlink to /private/var; the ancestor checks refuse symlinks.
+tempfile.tempdir=os.path.realpath(tempfile.gettempdir())
 
 class Broker(unittest.TestCase):
  def setUp(self):self.temp=tempfile.TemporaryDirectory();self.path=Path(self.temp.name)/'otp.db';self.now=[1794578400];self.calls=[];self.count=[12]

@@ -1,6 +1,8 @@
 import json,os,tempfile,unittest
 from pathlib import Path
 from labs_meet.saas_runtime import load
+# macOS keeps temp files under /var, a symlink to /private/var; the ancestor checks refuse symlinks.
+tempfile.tempdir=os.path.realpath(tempfile.gettempdir())
 class Runtime(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name);self.key=self.root/'auth.key';self.key.write_bytes(b'x'*32);self.key.chmod(0o600);self.path=self.root/'config.json';self.data={'root':str(self.root/'state'),'origin':'https://bot.143.lat','auth_key_file':str(self.key)}
